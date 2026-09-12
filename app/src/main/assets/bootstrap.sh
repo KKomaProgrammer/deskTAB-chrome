@@ -459,11 +459,16 @@ update_download_progress() {
   while read -r kind part expected sha; do
     [ "$kind" = "PART" ] || continue
     f="$CACHE_DIR/$part"
+    partial="$CACHE_DIR/.${part}.partial"
     if [ -f "$f" ]; then
       size="$(stat -c %s "$f" 2>/dev/null || printf '0')"
-      [ "$size" -gt "$expected" ] && size="$expected"
-      done=$((done + size))
+    elif [ -f "$partial" ]; then
+      size="$(stat -c %s "$partial" 2>/dev/null || printf '0')"
+    else
+      size=0
     fi
+    [ "$size" -gt "$expected" ] && size="$expected"
+    done=$((done + size))
   done < "$MANIFEST"
   now="$(date +%s)"
   elapsed=$((now - START_TS)); [ "$elapsed" -lt 1 ] && elapsed=1
@@ -602,16 +607,37 @@ if ! extract_runtime "$NEW_ROOT" "${PART_PATHS[@]}"; then
   exit 46
 fi
 
-[ -d "$LEGACY_ROOT" ] && mv "$LEGACY_ROOT" "$BACKUP_LEGACY"
-[ -d "$MODERN_CONTAINER" ] && mv "$MODERN_CONTAINER" "$BACKUP_MODERN"
-mv "$NEW_ROOT" "$LEGACY_ROOT"
+# 네트워크 파일 구성도 새 rootfs에서 먼저 끝낸다. 여기서 실패해도 기존 환경은 untouched 상태다.
+if ! mkdir -p "$NEW_ROOT/etc"; then
+  rm -rf "$NEW_ROOT"
+  progress 82 0 "새 Linux 환경 준비 실패 · 기존 환경 유지"
+  exit 46
+fi
+rm -f "$NEW_ROOT/etc/resolv.conf"
+printf '%s\n' 'nameserver 8.8.8.8' 'nameserver 8.8.4.4' > "$NEW_ROOT/etc/resolv.conf"
+printf '%s\n' '127.0.0.1 localhost' '::1 localhost' > "$NEW_ROOT/etc/hosts"
+
+# 디렉터리 rename은 같은 Termux 파일시스템 안에서 원자적이다. 각 단계 실패 시 즉시 원상복구한다.
+SWAP_OK=1
+if [ -d "$LEGACY_ROOT" ] && ! mv "$LEGACY_ROOT" "$BACKUP_LEGACY"; then
+  SWAP_OK=0
+fi
+if [ "$SWAP_OK" -eq 1 ] && [ -d "$MODERN_CONTAINER" ] && ! mv "$MODERN_CONTAINER" "$BACKUP_MODERN"; then
+  [ -d "$BACKUP_LEGACY" ] && mv "$BACKUP_LEGACY" "$LEGACY_ROOT" || true
+  SWAP_OK=0
+fi
+if [ "$SWAP_OK" -eq 1 ] && ! mv "$NEW_ROOT" "$LEGACY_ROOT"; then
+  [ -d "$BACKUP_LEGACY" ] && mv "$BACKUP_LEGACY" "$LEGACY_ROOT" || true
+  [ -d "$BACKUP_MODERN" ] && mv "$BACKUP_MODERN" "$MODERN_CONTAINER" || true
+  SWAP_OK=0
+fi
+if [ "$SWAP_OK" -ne 1 ]; then
+  rm -rf "$NEW_ROOT"
+  progress 82 0 "Linux 환경 교체 실패 · 기존 환경 복원 완료"
+  exit 46
+fi
 
 progress 94 16 "Linux 네트워크 및 PRoot 확인"
-mkdir -p "$LEGACY_ROOT/etc"
-rm -f "$LEGACY_ROOT/etc/resolv.conf"
-printf '%s\n' 'nameserver 8.8.8.8' 'nameserver 8.8.4.4' > "$LEGACY_ROOT/etc/resolv.conf"
-printf '%s\n' '127.0.0.1 localhost' '::1 localhost' > "$LEGACY_ROOT/etc/hosts"
-
 if proot-distro login ubuntu --shared-tmp -- /bin/bash -lc 'mkdir -p /tmp/runtime-root; chmod 700 /tmp/runtime-root; true'; then
   rm -rf "$BACKUP_LEGACY" "$BACKUP_MODERN"
 else

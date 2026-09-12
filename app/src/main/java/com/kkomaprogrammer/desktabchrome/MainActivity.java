@@ -158,7 +158,7 @@ public class MainActivity extends Activity {
         root.addView(button("세션 종료", v -> stopDesktop()));
 
         TextView note = new TextView(this);
-        note.setText("v1.2.7은 heartbeat 진행률을 단조 증가로 처리해 오래된 2% 상태가 이후 진행률을 덮어쓰지 못합니다. 설치 자체와 다운로드 진행률은 그대로 유지됩니다.");
+        note.setText("v1.2.13은 런타임 버전을 고정하고 각 조각의 크기와 SHA-256을 다운로드 단계에서 검증합니다. 검증된 파일만 설치에 사용하며, 압축 해제와 PRoot 전환 실패 시 기존 환경을 보존합니다.");
         note.setTextSize(13);
         note.setPadding(0, dp(20), 0, dp(8));
         root.addView(note);
