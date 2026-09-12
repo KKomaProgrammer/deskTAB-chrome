@@ -38,23 +38,26 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Validate pinned v10 Termux installer
+      - name: Validate pinned v11 Termux installer
         shell: bash
         run: |
           set -euo pipefail
           bash -n app/src/main/assets/bootstrap.sh
-          cat installer/v10/part-*.sh > /tmp/desktab-installer-v10.sh
-          test "$(sha256sum /tmp/desktab-installer-v10.sh | awk '{print $1}')" = "11386ff16c7e649303737e597c0a8e1b4e1155b29532c62deff55e56f7eb9ef3"
-          bash -n /tmp/desktab-installer-v10.sh
-          grep -q 'FORMAT"{print $2' /tmp/desktab-installer-v10.sh
-          grep -q '\[ "$fmt" = zst \]' /tmp/desktab-installer-v10.sh
-          grep -q 'ROOTFS_FILE_BYTES' /tmp/desktab-installer-v10.sh
-          grep -q '이전 82% 미완료 rootfs 선제 정리' /tmp/desktab-installer-v10.sh
-          grep -q 'zstd -d -q -c' /tmp/desktab-installer-v10.sh
-          grep -q -- '--checkpoint=' /tmp/desktab-installer-v10.sh
-          grep -q '120초 동안 진행되지 않아 자동 중단' /tmp/desktab-installer-v10.sh
-          grep -q 'Chrome/XFCE/필수 패키지 검증 실패' /tmp/desktab-installer-v10.sh
-          ! grep -q 'tar -xJpf' /tmp/desktab-installer-v10.sh
+          grep -q 'INSTALLER_COMMIT="8ac14c4e0a86106be3b908e27cee7d49d7ec118d"' app/src/main/assets/bootstrap.sh
+          cat installer/v10/part-*.sh > /tmp/desktab-installer-v11.sh
+          bash -n /tmp/desktab-installer-v11.sh
+          grep -q '\[ "$fmt" = zst \]' /tmp/desktab-installer-v11.sh
+          grep -q 'ROOTFS_FILE_BYTES' /tmp/desktab-installer-v11.sh
+          grep -q 'zstd -d -q -c' /tmp/desktab-installer-v11.sh
+          grep -q 'trap - ERR' /tmp/desktab-installer-v11.sh
+          grep -q -- '--no-same-owner' /tmp/desktab-installer-v11.sh
+          grep -q -- '--no-same-permissions' /tmp/desktab-installer-v11.sh
+          grep -q -- '--ignore-command-error' /tmp/desktab-installer-v11.sh
+          grep -q 'if wait "$EXTRACT_PID"; then' /tmp/desktab-installer-v11.sh
+          grep -q 'ROOTFS_STRUCTURE_OK' /tmp/desktab-installer-v11.sh
+          grep -q "printf '%s\\n' '11' > \"\$STATE_DIR/engine-version\"" /tmp/desktab-installer-v11.sh
+          grep -q 'Chrome/XFCE/필수 패키지 검증 실패' /tmp/desktab-installer-v11.sh
+          ! grep -q 'tar -xJpf' /tmp/desktab-installer-v11.sh
 
       - name: Validate published zstd runtime metadata
         env:
