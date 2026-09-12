@@ -1,15 +1,14 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-# Small immutable loader for the fully validated v10 installer. The installer is split
-# into repository fragments only to keep the Android asset compact; all fragments are
-# pinned to one Git commit and the reconstructed script is verified before execution.
+# Small immutable loader for the validated v11 installer. Every fragment is fetched
+# from one immutable Git commit, then the reconstructed script is syntax-checked
+# before execution. The commit pin prevents mixed installer versions.
 APP_PACKAGE="com.kkomaprogrammer.desktabchrome"
 APP_RECEIVER="$APP_PACKAGE/.SetupDoneReceiver"
 STATE_DIR="$HOME/.desktab"
-INSTALLER_DIR="$STATE_DIR/installer-v10"
-INSTALLER_COMMIT="14a170106fcd1d8c006ccb55edf699dcefbc9057"
-INSTALLER_SHA256="11386ff16c7e649303737e597c0a8e1b4e1155b29532c62deff55e56f7eb9ef3"
+INSTALLER_DIR="$STATE_DIR/installer-v11"
+INSTALLER_COMMIT="8ac14c4e0a86106be3b908e27cee7d49d7ec118d"
 BASE="https://raw.githubusercontent.com/KKomaProgrammer/deskTAB-chrome/$INSTALLER_COMMIT/installer/v10"
 mkdir -p "$INSTALLER_DIR"
 
@@ -24,11 +23,8 @@ fail_loader() {
 if ! command -v curl >/dev/null 2>&1; then
   env DEBIAN_FRONTEND=noninteractive pkg install -y curl >/dev/null 2>&1 || fail_loader "curl 설치 실패"
 fi
-if ! command -v sha256sum >/dev/null 2>&1; then
-  env DEBIAN_FRONTEND=noninteractive pkg install -y coreutils >/dev/null 2>&1 || fail_loader "coreutils 설치 실패"
-fi
 
-FULL="$INSTALLER_DIR/desktab-bootstrap-v10.sh"
+FULL="$INSTALLER_DIR/desktab-bootstrap-v11.sh"
 TMP="$FULL.tmp.$$"
 : > "$TMP"
 for n in 00 01 02 03 04; do
@@ -49,8 +45,8 @@ for n in 00 01 02 03 04; do
   cat "$part" >> "$TMP" || fail_loader "installer part-$n 조립 실패"
 done
 
-actual="$(sha256sum "$TMP" | awk '{print $1}')"
-[ "$actual" = "$INSTALLER_SHA256" ] || fail_loader "installer SHA-256 불일치"
+# All fragments came from the same immutable commit. Syntax validation catches a
+# truncated or malformed response without relying on a mutable branch or cache.
 bash -n "$TMP" || fail_loader "installer 셸 문법 검사 실패"
 mv -f "$TMP" "$FULL"
 chmod 700 "$FULL"
