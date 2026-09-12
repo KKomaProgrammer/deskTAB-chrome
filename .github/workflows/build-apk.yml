@@ -38,19 +38,24 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Validate Termux bootstrap structure
+      - name: Validate pinned v10 Termux installer
         shell: bash
         run: |
           set -euo pipefail
           bash -n app/src/main/assets/bootstrap.sh
-          grep -q 'validate_manifest_file' app/src/main/assets/bootstrap.sh
-          grep -q 'mapfile -t PART_NAMES' app/src/main/assets/bootstrap.sh
-          grep -q 'for ((i=0; i<PART_COUNT; i++))' app/src/main/assets/bootstrap.sh
-          ! grep -q 'done < "$MANIFEST"' app/src/main/assets/bootstrap.sh
-          ! grep -q 'pkill -f google-chrome-stable' app/src/main/assets/bootstrap.sh
-          ! grep -q 'pkill -f xfce4-session' app/src/main/assets/bootstrap.sh
+          cat installer/v10/part-*.sh > /tmp/desktab-installer-v10.sh
+          test "$(sha256sum /tmp/desktab-installer-v10.sh | awk '{print $1}')" = "b90141471bc8242f1d626cdbfc58b2b508742a015d0b626233401289ed6599d0"
+          bash -n /tmp/desktab-installer-v10.sh
+          grep -q 'FORMAT"{print $2' /tmp/desktab-installer-v10.sh
+          grep -q '\[ "$fmt" = zst \]' /tmp/desktab-installer-v10.sh
+          grep -q 'ROOTFS_FILE_BYTES' /tmp/desktab-installer-v10.sh
+          grep -q 'zstd -d -q -c' /tmp/desktab-installer-v10.sh
+          grep -q -- '--checkpoint=' /tmp/desktab-installer-v10.sh
+          grep -q '120초 동안 진행되지 않아 자동 중단' /tmp/desktab-installer-v10.sh
+          grep -q 'Chrome/XFCE/필수 패키지 검증 실패' /tmp/desktab-installer-v10.sh
+          ! grep -q 'tar -xJpf' /tmp/desktab-installer-v10.sh
 
-      - name: Validate published runtime metadata
+      - name: Validate published zstd runtime metadata
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -63,7 +68,7 @@ jobs:
           if token:
               headers['Authorization'] = f'Bearer {token}'
 
-          def get_json(url, tries=6):
+          def get_json(url, tries=8):
               last = None
               for n in range(tries):
                   try:
@@ -75,7 +80,7 @@ jobs:
                       time.sleep(min(1 + n, 5))
               raise RuntimeError(f'GitHub metadata request failed: {last}')
 
-          def get_text(url, tries=6):
+          def get_text(url, tries=8):
               last = None
               for n in range(tries):
                   try:
@@ -94,16 +99,19 @@ jobs:
           rows = [line.split() for line in text.splitlines() if line.strip()]
           fields = {r[0]: r[1] for r in rows if len(r) >= 2 and r[0] != 'PART'}
           assert fields.get('ARCH') == 'arm64'
-          assert fields.get('FORMAT') == 'xz'
+          assert fields.get('FORMAT') == 'zst'
+          assert fields.get('ARCHIVE_NAME') == 'runtime-arm64.tar.zst'
           total = int(fields['ARCHIVE_SIZE'])
           archive_sha = fields['ARCHIVE_SHA256']
+          rootfs_tar = int(fields['ROOTFS_TAR_SIZE'])
+          rootfs_files = int(fields['ROOTFS_FILE_BYTES'])
+          assert total > 0 and rootfs_tar > total and rootfs_files > 0
           assert re.fullmatch(r'[0-9a-f]{64}', archive_sha)
           part_size = int(fields.get('PART_SIZE_BYTES', '50331648'))
           parts = [r for r in rows if r[0] == 'PART']
           expected_count = (total + part_size - 1) // part_size
           assert len(parts) == expected_count, (len(parts), expected_count)
-          if 'PART_COUNT' in fields:
-              assert int(fields['PART_COUNT']) == expected_count
+          assert int(fields['PART_COUNT']) == expected_count
           assert sum(int(r[2]) for r in parts) == total
           for i, r in enumerate(parts):
               assert len(r) == 4
@@ -117,7 +125,7 @@ jobs:
           assert remote.get('manifest.txt', 0) > 0
           for r in parts:
               assert remote.get(r[1]) == int(r[2]), (r[1], remote.get(r[1]), r[2])
-          print(f'Runtime metadata OK: commit={commit}, parts={len(parts)}, bytes={total}')
+          print(f'Runtime metadata OK: commit={commit}, format=zst, parts={len(parts)}, bytes={total}, tar={rootfs_tar}')
           PY
 
       - name: Build debug APK
