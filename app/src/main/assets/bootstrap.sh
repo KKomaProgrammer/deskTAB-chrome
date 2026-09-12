@@ -390,13 +390,63 @@ fi
 update_download_progress
 
 progress 79 45 "다운로드 완료 · 무결성 검사"
-while read -r kind part size sha; do
-  [ "$kind" = "PART" ] || continue
-  actual_size=$(stat -c %s "$CACHE_DIR/$part")
-  [ "$actual_size" = "$size" ] || { echo "Size mismatch: $part" >&2; exit 43; }
-  echo "$sha  $CACHE_DIR/$part" | sha256sum -c - >/dev/null
-done < "$MANIFEST"
-CALC_SHA=$(while read -r _ part _ _; do cat "$CACHE_DIR/$part"; done < <(awk '$1=="PART"{print}' "$MANIFEST") | sha256sum | awk '{print $1}')
+VERIFY_ROUND=0
+while true; do
+  VERIFY_ROUND=$((VERIFY_ROUND + 1))
+  VERIFY_FAILED=0
+
+  while read -r kind part size sha; do
+    [ "$kind" = "PART" ] || continue
+    part_path="$CACHE_DIR/$part"
+    actual_size="$(stat -c %s "$part_path" 2>/dev/null || echo 0)"
+
+    if [ ! -f "$part_path" ] || [ "$actual_size" != "$size" ]; then
+      progress 79 45 "무결성 검사 · $part 누락/크기 오류 자동 복구"
+      rm -f "$part_path"
+      if ! download_part "$part" "$size"; then
+        VERIFY_FAILED=1
+        break
+      fi
+      actual_size="$(stat -c %s "$part_path" 2>/dev/null || echo 0)"
+      if [ ! -f "$part_path" ] || [ "$actual_size" != "$size" ]; then
+        VERIFY_FAILED=1
+        break
+      fi
+    fi
+
+    actual_sha="$(sha256sum "$part_path" 2>/dev/null | awk '{print $1}' || true)"
+    if [ "$actual_sha" != "$sha" ]; then
+      progress 79 45 "무결성 검사 · $part SHA 오류 자동 복구"
+      rm -f "$part_path"
+      if ! download_part "$part" "$size"; then
+        VERIFY_FAILED=1
+        break
+      fi
+      actual_size="$(stat -c %s "$part_path" 2>/dev/null || echo 0)"
+      actual_sha="$(sha256sum "$part_path" 2>/dev/null | awk '{print $1}' || true)"
+      if [ "$actual_size" != "$size" ] || [ "$actual_sha" != "$sha" ]; then
+        VERIFY_FAILED=1
+        break
+      fi
+    fi
+  done < "$MANIFEST"
+
+  if [ "$VERIFY_FAILED" -eq 0 ]; then
+    break
+  fi
+  if [ "$VERIFY_ROUND" -ge 3 ]; then
+    echo "Runtime part integrity repair failed after $VERIFY_ROUND attempts" >&2
+    exit 43
+  fi
+  progress 79 45 "무결성 검사 · 손상 조각 재검사 (${VERIFY_ROUND}/3)"
+done
+
+CALC_SHA="$({
+  while read -r kind part _ _; do
+    [ "$kind" = "PART" ] || continue
+    cat "$CACHE_DIR/$part"
+  done < "$MANIFEST"
+} | sha256sum | awk '{print $1}')"
 [ "$CALC_SHA" = "$ARCHIVE_SHA" ] || { echo "Archive checksum mismatch" >&2; exit 44; }
 
 progress 82 38 "Ubuntu + XFCE + Chrome 이미지 고속 해제"
