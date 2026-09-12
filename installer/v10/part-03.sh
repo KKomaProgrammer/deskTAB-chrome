@@ -1,3 +1,10 @@
+  for ((j=0; j<PART_COUNT; j++)); do
+    f="$CACHE_DIR/${PART_NAMES[$j]}"; partial="$CACHE_DIR/.${PART_NAMES[$j]}.partial"; expected="${PART_SIZES[$j]}"
+    if [ -f "$f" ]; then size="$(stat -c %s "$f" 2>/dev/null || printf 0)";
+    elif [ -f "$partial" ]; then size="$(stat -c %s "$partial" 2>/dev/null || printf 0)";
+    else size=0; fi
+    [ "$size" -gt "$expected" ] && size="$expected"
+    done=$((done + size))
   done
   now="$(date +%s)"; elapsed=$((now - START_TS)); [ "$elapsed" -lt 1 ] && elapsed=1
   pct=$((14 + done * 64 / TOTAL_SIZE)); [ "$pct" -gt 78 ] && pct=78
@@ -141,10 +148,3 @@ HELPER
 chmod +x "$CHECKPOINT_HELPER"
 : > "$EXTRACT_CHECKPOINT"
 : > "$EXTRACT_LOG"
-CHECKPOINT_INTERVAL=4096
-RECORD_BYTES=10240
-EXTRACT_START="$(date +%s)"
-LAST_CHANGE="$EXTRACT_START"
-LAST_CP=0
-progress 82 75 "zstd 초고속 해제 시작 · 무정지 감시 활성"
-(
