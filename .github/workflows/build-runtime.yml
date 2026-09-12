@@ -1,0 +1,83 @@
+name: Build fast Linux runtime
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'runtime/**'
+      - '.github/workflows/build-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktab-runtime-image
+  cancel-in-progress: true
+
+jobs:
+  build-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ARM64 root filesystem
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq pigz
+          rm -rf /tmp/desktab-rootfs /tmp/desktab-publish
+          mkdir -p /tmp/desktab-rootfs /tmp/desktab-publish
+          docker buildx build \
+            --platform linux/arm64 \
+            --output type=local,dest=/tmp/desktab-rootfs \
+            runtime
+
+      - name: Pack and split runtime
+        run: |
+          set -euo pipefail
+          ARCHIVE=/tmp/desktab-runtime-arm64.tar.gz
+          tar --numeric-owner -C /tmp/desktab-rootfs -cf - . | pigz -6 > "$ARCHIVE"
+          ARCHIVE_SIZE=$(stat -c %s "$ARCHIVE")
+          ARCHIVE_SHA=$(sha256sum "$ARCHIVE" | awk '{print $1}')
+          split -b 48M -d -a 3 "$ARCHIVE" /tmp/desktab-publish/runtime-arm64.part-
+          {
+            echo "VERSION $GITHUB_SHA"
+            echo "ARCH arm64"
+            echo "ARCHIVE_SIZE $ARCHIVE_SIZE"
+            echo "ARCHIVE_SHA256 $ARCHIVE_SHA"
+            for f in /tmp/desktab-publish/runtime-arm64.part-*; do
+              name=$(basename "$f")
+              size=$(stat -c %s "$f")
+              sha=$(sha256sum "$f" | awk '{print $1}')
+              echo "PART $name $size $sha"
+            done
+          } > /tmp/desktab-publish/manifest.txt
+          ls -lh /tmp/desktab-publish
+          cat /tmp/desktab-publish/manifest.txt
+
+      - name: Publish runtime-image branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan runtime-image-work
+          git rm -rf . || true
+          mkdir -p runtime
+          cp /tmp/desktab-publish/* runtime/
+          cat > README.md <<'EOF'
+          # deskTAB Chrome prebuilt runtime
+
+          Generated automatically. These files contain the prebuilt ARM64 Ubuntu + XFCE + Google Chrome runtime used by the Android fast installer.
+          EOF
+          git add -f runtime README.md
+          git commit -m "Update prebuilt ARM64 runtime ($GITHUB_SHA)"
+          git push --force origin HEAD:runtime-image
