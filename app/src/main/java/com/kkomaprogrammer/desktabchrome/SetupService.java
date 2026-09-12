@@ -115,8 +115,6 @@ public class SetupService extends Service {
 
         SharedPreferences p = getSharedPreferences("state", MODE_PRIVATE);
 
-        // v6부터 SetupService는 Termux 명령을 절대 직접 실행하지 않는다.
-        // MainActivity가 딱 한 번 실행하고, 이 서비스는 heartbeat/알림만 추적한다.
         if (ACTION_BOOTSTRAP.equals(action) && !p.getBoolean("setup_running", false)) {
             long now = System.currentTimeMillis();
             p.edit()
@@ -183,6 +181,13 @@ public class SetupService extends Service {
                         .putString("termux_last_error", "")
                         .putLong("setup_eta_base", 0)
                         .putLong("setup_eta_at", now).apply();
+                return true;
+            }
+
+            int currentProgress = p.getInt("setup_progress", 0);
+            if (p.getBoolean("ready", false)) return true;
+            if (progress < currentProgress) {
+                // heartbeat가 살아 있다는 사실만 인정하고 오래된 낮은 진행률은 무시한다.
                 return true;
             }
 
