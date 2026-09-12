@@ -15,24 +15,36 @@ public class SetupDoneReceiver extends BroadcastReceiver {
         SharedPreferences p = context.getSharedPreferences("state", Context.MODE_PRIVATE);
         String action = intent.getAction();
         if (PROGRESS.equals(action)) {
-            int progress = intent.getIntExtra("progress", p.getInt("setup_progress", 1));
+            int incoming = intent.getIntExtra("progress", p.getInt("setup_progress", 1));
             long eta = intent.getLongExtra("eta", 0);
             String stage = intent.getStringExtra("stage");
             if (stage == null) stage = "Linux 환경 설정 중";
-            p.edit().putBoolean("setup_running", true).putInt("setup_progress", progress)
+
+            if (p.getBoolean("ready", false)) return;
+            int current = p.getInt("setup_progress", 0);
+            if (incoming < current) {
+                // 늦게 도착한 과거 broadcast가 진행률/단계/ETA를 되돌리지 못하게 한다.
+                SetupService.updateSetupNotification(context, current,
+                        p.getString("setup_stage", stage), SetupService.remainingEta(p));
+                return;
+            }
+
+            p.edit().putBoolean("setup_running", true).putInt("setup_progress", incoming)
                     .putString("setup_stage", stage).putLong("setup_eta_base", eta)
                     .putLong("setup_eta_at", System.currentTimeMillis()).apply();
-            SetupService.updateSetupNotification(context, progress, stage, eta);
+            SetupService.updateSetupNotification(context, incoming, stage, eta);
         } else if (DONE.equals(action)) {
             p.edit().putBoolean("ready", true).putBoolean("setup_running", false)
                     .putInt("setup_progress", 100).putString("setup_stage", "설정 완료")
                     .putLong("setup_eta_base", 0).putLong("setup_eta_at", System.currentTimeMillis()).apply();
-            SetupService.updateSetupNotification(context, 100, "설정 완료 · 이제 Desktop Chrome을 실행할 수 있습니다", 0);
+            SetupService.updateSetupNotification(context, 100,
+                    "설정 완료 · 이제 Desktop Chrome을 실행할 수 있습니다", 0);
             context.stopService(new Intent(context, SetupService.class));
         } else if (FAILED.equals(action)) {
             String stage = intent.getStringExtra("stage");
             if (stage == null) stage = "설정 실패";
-            p.edit().putBoolean("setup_running", false).putString("setup_stage", stage).putLong("setup_eta_base", 0).apply();
+            p.edit().putBoolean("setup_running", false).putString("setup_stage", stage)
+                    .putString("termux_last_error", stage).putLong("setup_eta_base", 0).apply();
             SetupService.updateSetupNotification(context, p.getInt("setup_progress", 0), stage, 0);
             context.stopService(new Intent(context, SetupService.class));
         }
