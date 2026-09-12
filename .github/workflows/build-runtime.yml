@@ -30,23 +30,43 @@ jobs:
           rm -rf /tmp/desktab-publish
           mkdir -p /tmp/desktab-publish
           docker build --pull -t desktab-runtime:arm64 runtime
+
+          # Fail the build before publishing if any required desktop component is absent.
+          docker run --rm desktab-runtime:arm64 /bin/bash -lc '
+            set -e
+            test "$(dpkg --print-architecture)" = arm64
+            command -v google-chrome-stable >/dev/null
+            command -v xfce4-session >/dev/null
+            command -v dbus-launch >/dev/null
+            test -f /root/.config/autostart/desktab-chrome.desktop
+            dpkg-query -W -f="${Status}\n" xfce4 dbus-x11 ca-certificates curl wget gnupg xdg-utils fonts-noto fonts-noto-cjk google-chrome-stable | grep -v "install ok installed" && exit 1 || true
+          '
+
           CID=$(docker create desktab-runtime:arm64)
           trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
           docker export "$CID" | xz -T0 -6 -c > /tmp/desktab-runtime-arm64.tar.xz
+          xz -t /tmp/desktab-runtime-arm64.tar.xz
 
-      - name: Split and checksum runtime
+      - name: Split, checksum and self-test runtime
         run: |
           set -euo pipefail
           ARCHIVE=/tmp/desktab-runtime-arm64.tar.xz
+          PART_SIZE=50331648
           ARCHIVE_SIZE=$(stat -c %s "$ARCHIVE")
           ARCHIVE_SHA=$(sha256sum "$ARCHIVE" | awk '{print $1}')
           split -b 48M -d -a 3 "$ARCHIVE" /tmp/desktab-publish/runtime-arm64.part-
+          PART_COUNT=$(find /tmp/desktab-publish -maxdepth 1 -type f -name 'runtime-arm64.part-*' | wc -l | tr -d ' ')
+          EXPECTED_COUNT=$(( (ARCHIVE_SIZE + PART_SIZE - 1) / PART_SIZE ))
+          test "$PART_COUNT" -eq "$EXPECTED_COUNT"
+
           {
             echo "VERSION $GITHUB_SHA"
             echo "ARCH arm64"
             echo "FORMAT xz"
             echo "ARCHIVE_SIZE $ARCHIVE_SIZE"
             echo "ARCHIVE_SHA256 $ARCHIVE_SHA"
+            echo "PART_SIZE_BYTES $PART_SIZE"
+            echo "PART_COUNT $PART_COUNT"
             for f in /tmp/desktab-publish/runtime-arm64.part-*; do
               name=$(basename "$f")
               size=$(stat -c %s "$f")
@@ -54,6 +74,28 @@ jobs:
               echo "PART $name $size $sha"
             done
           } > /tmp/desktab-publish/manifest.txt
+
+          # Verify names, count, total size, every SHA, and exact reassembly before publish.
+          SUM=0
+          INDEX=0
+          while read -r kind name size sha; do
+            [ "$kind" = PART ] || continue
+            EXPECTED_NAME=$(printf 'runtime-arm64.part-%03d' "$INDEX")
+            test "$name" = "$EXPECTED_NAME"
+            test "$(stat -c %s "/tmp/desktab-publish/$name")" = "$size"
+            test "$(sha256sum "/tmp/desktab-publish/$name" | awk '{print $1}')" = "$sha"
+            SUM=$((SUM + size))
+            INDEX=$((INDEX + 1))
+          done < /tmp/desktab-publish/manifest.txt
+          test "$INDEX" -eq "$PART_COUNT"
+          test "$SUM" -eq "$ARCHIVE_SIZE"
+
+          cat /tmp/desktab-publish/runtime-arm64.part-* > /tmp/desktab-runtime-reassembled.tar.xz
+          test "$(stat -c %s /tmp/desktab-runtime-reassembled.tar.xz)" = "$ARCHIVE_SIZE"
+          test "$(sha256sum /tmp/desktab-runtime-reassembled.tar.xz | awk '{print $1}')" = "$ARCHIVE_SHA"
+          cmp -s "$ARCHIVE" /tmp/desktab-runtime-reassembled.tar.xz
+          xz -t /tmp/desktab-runtime-reassembled.tar.xz
+
           du -h "$ARCHIVE"
           ls -lh /tmp/desktab-publish
           cat /tmp/desktab-publish/manifest.txt
