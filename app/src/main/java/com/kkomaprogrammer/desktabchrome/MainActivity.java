@@ -41,7 +41,7 @@ public class MainActivity extends Activity {
     private static final int REQ_RUN_PERMISSION = 2001;
     private static final int REQ_UNKNOWN_SOURCES = 2002;
     private static final int REQ_NOTIFICATIONS = 2003;
-    private static final int ENGINE_VERSION = 9;
+    private static final int ENGINE_VERSION = 11;
 
     private static final String TERMUX_BOOTSTRAP_PATH =
             "/data/data/com.termux/files/home/desktab-bootstrap.sh";
@@ -83,7 +83,7 @@ public class MainActivity extends Activity {
                 && prefs.getInt("setup_engine_version", 0) < ENGINE_VERSION) {
             prefs.edit().putBoolean("setup_running", false)
                     .putInt("setup_progress", 0)
-                    .putString("setup_stage", "이전 실행 방식 초기화 · 완전 manifest + 배열 설치 엔진 v9 준비")
+                    .putString("setup_stage", "이전 실행 방식 초기화 · Android 호환 zstd 설치 엔진 v11 준비")
                     .putString("termux_last_error", "")
                     .putLong("setup_eta_base", 0).apply();
         }
@@ -158,7 +158,7 @@ public class MainActivity extends Activity {
         root.addView(button("세션 종료", v -> stopDesktop()));
 
         TextView note = new TextView(this);
-        note.setText("v1.2.15는 불완전 manifest를 거부하고 모든 이미지 조각을 고정 배열로 관리합니다. 조각 수·순서·크기·SHA와 완성 XZ SHA를 모두 확인한 뒤 기존 환경을 보존한 채 설치합니다.");
+        note.setText("v1.2.17은 zstd 해제 작업의 ERR trap 오동작과 Android 메타데이터 호환 문제를 해결했습니다. 기존 다운로드/검증/heartbeat는 유지하고, 새 rootfs를 완전히 검증한 뒤에만 기존 환경과 교체합니다.");
         note.setTextSize(13);
         note.setPadding(0, dp(20), 0, dp(8));
         root.addView(note);
@@ -380,7 +380,7 @@ public class MainActivity extends Activity {
             prefs.edit().putString("setup_stage",
                     "자동 실행 heartbeat 없음 · 로컬 스크립트 직접 실행 명령 복사됨")
                     .putString("termux_last_error",
-                            "Termux에서 bash ~/desktab-bootstrap.sh 를 한 번만 실행하세요. v9은 중복 실행을 자동 차단합니다.")
+                            "Termux에서 bash ~/desktab-bootstrap.sh 를 한 번만 실행하세요. v11은 중복 실행을 자동 차단합니다.")
                     .apply();
             openPackage(TERMUX);
         }, 12000);
@@ -486,7 +486,7 @@ public class MainActivity extends Activity {
         i.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", new String[]{TERMUX_BOOTSTRAP_PATH});
         i.putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home");
         i.putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultIntent);
-        i.putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "deskTAB Linux setup v9");
+        i.putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "deskTAB Linux setup v11");
         if (visibleTerminal) {
             i.putExtra("com.termux.RUN_COMMAND_BACKGROUND", false);
             i.putExtra("com.termux.RUN_COMMAND_RUNNER", "terminal-session");
