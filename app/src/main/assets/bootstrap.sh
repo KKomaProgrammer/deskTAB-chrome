@@ -8,7 +8,7 @@ APP_PACKAGE="com.kkomaprogrammer.desktabchrome"
 APP_RECEIVER="$APP_PACKAGE/.SetupDoneReceiver"
 STATE_DIR="$HOME/.desktab"
 INSTALLER_DIR="$STATE_DIR/installer-v11"
-INSTALLER_COMMIT="8ac14c4e0a86106be3b908e27cee7d49d7ec118d"
+INSTALLER_COMMIT="c31d47bd6d7f969e87372461b4f73393d5e9d377"
 BASE="https://raw.githubusercontent.com/KKomaProgrammer/deskTAB-chrome/$INSTALLER_COMMIT/installer/v10"
 mkdir -p "$INSTALLER_DIR"
 
