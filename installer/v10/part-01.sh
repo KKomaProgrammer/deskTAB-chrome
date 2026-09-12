@@ -55,7 +55,7 @@ resolve_runtime_commit() (
     if curl -fsSL --retry 2 --retry-all-errors --retry-delay 1 --connect-timeout 10 --max-time 30 \
       -H 'Accept: application/vnd.github+json' \
       'https://api.github.com/repos/KKomaProgrammer/deskTAB-chrome/branches/runtime-image' -o "$tmp"; then
-      sha="$(grep -m1 -oE '"'"'"sha"'"'"[[:space:]]*:[[:space:]]*"'"'"[0-9a-f]{40}"'"'"' "$tmp" | grep -oE '[0-9a-f]{40}' | head -n1)"
+      sha="$(grep -m1 -oE '"sha"[[:space:]]*:[[:space:]]*"[0-9a-f]{40}"' "$tmp" | grep -oE '[0-9a-f]{40}' | head -n1)"
       if printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$'; then
         mv -f "$tmp" "$out"
         printf '%s\n' "$sha"
@@ -65,7 +65,7 @@ resolve_runtime_commit() (
     sleep 1
   done
   if [ -s "$out" ]; then
-    sha="$(grep -m1 -oE '"'"'"sha"'"'"[[:space:]]*:[[:space:]]*"'"'"[0-9a-f]{40}"'"'"' "$out" | grep -oE '[0-9a-f]{40}' | head -n1)"
+    sha="$(grep -m1 -oE '"sha"[[:space:]]*:[[:space:]]*"[0-9a-f]{40}"' "$out" | grep -oE '[0-9a-f]{40}' | head -n1)"
     if printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$'; then
       printf '%s\n' "$sha"
       exit 0
