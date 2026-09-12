@@ -23,8 +23,11 @@ failed() {
 }
 trap failed ERR
 
-# v1.1.x에서 남은 느린 설치 프로세스를 종료해 package-manager lock을 해제한다.
+# 이전 v1.1 설치가 남아 있으면 먼저 종료해 apt/rootfs 잠금 충돌을 없앤다.
 pkill -f 'proot-distro install ubuntu' >/dev/null 2>&1 || true
+pkill -f 'proot.*installed-rootfs/ubuntu' >/dev/null 2>&1 || true
+pkill -f 'proot.*containers/ubuntu' >/dev/null 2>&1 || true
+pkill -f '[a]pt-get install.*termux-x11' >/dev/null 2>&1 || true
 pkill -f 'apt-get install -y xfce4' >/dev/null 2>&1 || true
 pkill -f 'apt-get install -y fonts-noto' >/dev/null 2>&1 || true
 pkill -f 'google-chrome-stable_current_.*deb' >/dev/null 2>&1 || true
@@ -38,29 +41,35 @@ if [ "$ARCH" != "aarch64" ]; then
   exit 41
 fi
 
-progress 2 280 "Termux 저장소 고속 초기화"
+progress 2 285 "Termux 저장소 초기화"
 mkdir -p "$PREFIX/etc/apt/sources.list.d"
 printf '%s\n' 'deb https://packages.termux.dev/apt/termux-main stable main' > "$PREFIX/etc/apt/sources.list"
 printf '%s\n' 'deb https://packages.termux.dev/apt/termux-x11 x11 main' > "$PREFIX/etc/apt/sources.list.d/x11.list"
 apt-get update -o Acquire::Languages=none -o Acquire::Retries=3
 
-progress 6 250 "X11 · PRoot · 오디오 구성요소 설치"
-apt-get install -y x11-repo termux-x11-nightly proot-distro pulseaudio curl pigz ca-certificates
+# curl/xz/tar/ca-certificates는 Termux 핵심 bootstrap에 이미 포함된다.
+progress 7 250 "X11 · PRoot · 오디오 최소 구성 설치"
+apt-get install -y termux-x11-nightly proot-distro pulseaudio
 
-progress 10 225 "미리 구성된 Linux 이미지 정보 확인"
+progress 11 220 "사전 구성 Linux 이미지 정보 확인"
 MANIFEST="$CACHE_DIR/manifest.txt"
 curl -fL --retry 5 --retry-delay 1 --connect-timeout 10 \
   "$RUNTIME_BASE/manifest.txt" -o "$MANIFEST"
 TOTAL_SIZE="$(awk '$1=="ARCHIVE_SIZE"{print $2}' "$MANIFEST")"
 ARCHIVE_SHA="$(awk '$1=="ARCHIVE_SHA256"{print $2}' "$MANIFEST")"
+FORMAT="$(awk '$1=="FORMAT"{print $2}' "$MANIFEST")"
 PART_COUNT="$(awk '$1=="PART"{n++} END{print n+0}' "$MANIFEST")"
 if [ -z "$TOTAL_SIZE" ] || [ "$TOTAL_SIZE" -le 0 ] || [ "$PART_COUNT" -le 0 ]; then
   echo "Invalid fast-runtime manifest" >&2
   exit 42
 fi
+if [ "$FORMAT" != "xz" ]; then
+  echo "Unsupported runtime format: $FORMAT" >&2
+  exit 45
+fi
 
-# 이전 중단 다운로드는 이어받고, GitHub raw CDN에서 여러 조각을 동시에 받는다.
-progress 12 210 "Linux 이미지 병렬 다운로드 시작 ($PART_COUNT개 조각)"
+# GitHub raw CDN에서 조각 6개를 동시에 받고, 중단된 조각은 이어받는다.
+progress 13 205 "Linux 이미지 병렬 다운로드 시작 ($PART_COUNT개 조각)"
 export CACHE_DIR RUNTIME_BASE
 awk '$1=="PART"{print $2}' "$MANIFEST" | \
   xargs -P 6 -n 1 sh -c '
@@ -90,12 +99,12 @@ while kill -0 "$DL_PID" >/dev/null 2>&1; do
   NOW=$(date +%s)
   ELAPSED=$((NOW - START_TS))
   [ "$ELAPSED" -lt 1 ] && ELAPSED=1
-  PCT=$((12 + DONE * 64 / TOTAL_SIZE))
-  [ "$PCT" -gt 76 ] && PCT=76
+  PCT=$((13 + DONE * 65 / TOTAL_SIZE))
+  [ "$PCT" -gt 78 ] && PCT=78
   if [ "$DONE" -gt 1048576 ]; then
-    ETA=$(((TOTAL_SIZE - DONE) * ELAPSED / DONE + 70))
+    ETA=$(((TOTAL_SIZE - DONE) * ELAPSED / DONE + 55))
   else
-    ETA=210
+    ETA=205
   fi
   MB=$((DONE / 1048576))
   TOTAL_MB=$((TOTAL_SIZE / 1048576))
@@ -104,7 +113,7 @@ while kill -0 "$DL_PID" >/dev/null 2>&1; do
 done
 wait "$DL_PID"
 
-progress 77 70 "다운로드 무결성 검사"
+progress 79 50 "다운로드 무결성 검사"
 while read -r kind part size sha; do
   [ "$kind" = "PART" ] || continue
   actual_size=$(stat -c %s "$CACHE_DIR/$part")
@@ -114,23 +123,23 @@ done < "$MANIFEST"
 CALC_SHA=$(while read -r _ part _ _; do cat "$CACHE_DIR/$part"; done < <(awk '$1=="PART"{print}' "$MANIFEST") | sha256sum | awk '{print $1}')
 [ "$CALC_SHA" = "$ARCHIVE_SHA" ] || { echo "Archive checksum mismatch" >&2; exit 44; }
 
-progress 80 55 "Ubuntu + XFCE + Chrome 이미지 고속 해제"
+progress 82 42 "Ubuntu + XFCE + Chrome 이미지 고속 해제"
 LEGACY_ROOT="$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu"
 MODERN_CONTAINER="$PREFIX/var/lib/proot-distro/containers/ubuntu"
 rm -rf "$LEGACY_ROOT" "$MODERN_CONTAINER"
 mkdir -p "$LEGACY_ROOT"
 while read -r _ part _ _; do cat "$CACHE_DIR/$part"; done < <(awk '$1=="PART"{print}' "$MANIFEST") \
-  | pigz -dc \
+  | xz -dc \
   | tar -xpf - -C "$LEGACY_ROOT"
 
-progress 92 25 "Linux 네트워크 및 PRoot 등록"
+progress 94 18 "Linux 네트워크 및 PRoot 등록"
 mkdir -p "$LEGACY_ROOT/etc"
 rm -f "$LEGACY_ROOT/etc/resolv.conf"
 printf '%s\n' 'nameserver 8.8.8.8' 'nameserver 8.8.4.4' > "$LEGACY_ROOT/etc/resolv.conf"
 printf '%s\n' '127.0.0.1 localhost' '::1 localhost' > "$LEGACY_ROOT/etc/hosts"
 proot-distro login ubuntu --shared-tmp -- /bin/bash -lc 'mkdir -p /tmp/runtime-root; chmod 700 /tmp/runtime-root; true'
 
-progress 96 12 "원클릭 Chrome 실행 환경 구성"
+progress 97 8 "원클릭 Chrome 실행 환경 구성"
 cat >"$STATE_DIR/launch.sh" <<'LAUNCH'
 #!/data/data/com.termux/files/usr/bin/bash
 set -e
@@ -153,7 +162,6 @@ exec proot-distro login ubuntu --shared-tmp -- /bin/bash -lc '
 LAUNCH
 chmod +x "$STATE_DIR/launch.sh"
 
-# 설치 후 압축 조각을 지워 저장 공간을 회수한다. 설치된 Linux/Chrome 데이터는 유지된다.
 rm -rf "$CACHE_DIR"
 mkdir -p "$CACHE_DIR"
 printf '%s\n' '2' > "$STATE_DIR/engine-version"
