@@ -17,35 +17,27 @@ concurrency:
 
 jobs:
   build-runtime:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build ARM64 root filesystem
+      - name: Build native ARM64 root filesystem
         run: |
+          set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq pigz
-          rm -rf /tmp/desktab-rootfs /tmp/desktab-publish
-          mkdir -p /tmp/desktab-rootfs /tmp/desktab-publish
-          docker buildx build \
-            --platform linux/arm64 \
-            --output type=local,dest=/tmp/desktab-rootfs \
-            runtime
+          rm -rf /tmp/desktab-publish
+          mkdir -p /tmp/desktab-publish
+          docker build --pull -t desktab-runtime:arm64 runtime
+          CID=$(docker create desktab-runtime:arm64)
+          trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
+          docker export "$CID" | pigz -9 > /tmp/desktab-runtime-arm64.tar.gz
 
-      - name: Pack and split runtime
+      - name: Split and checksum runtime
         run: |
           set -euo pipefail
           ARCHIVE=/tmp/desktab-runtime-arm64.tar.gz
-          tar --numeric-owner -C /tmp/desktab-rootfs -cf - . | pigz -6 > "$ARCHIVE"
           ARCHIVE_SIZE=$(stat -c %s "$ARCHIVE")
           ARCHIVE_SHA=$(sha256sum "$ARCHIVE" | awk '{print $1}')
           split -b 48M -d -a 3 "$ARCHIVE" /tmp/desktab-publish/runtime-arm64.part-
@@ -61,6 +53,7 @@ jobs:
               echo "PART $name $size $sha"
             done
           } > /tmp/desktab-publish/manifest.txt
+          du -h "$ARCHIVE"
           ls -lh /tmp/desktab-publish
           cat /tmp/desktab-publish/manifest.txt
 
@@ -73,11 +66,8 @@ jobs:
           git rm -rf . || true
           mkdir -p runtime
           cp /tmp/desktab-publish/* runtime/
-          cat > README.md <<'EOF'
-          # deskTAB Chrome prebuilt runtime
-
-          Generated automatically. These files contain the prebuilt ARM64 Ubuntu + XFCE + Google Chrome runtime used by the Android fast installer.
-          EOF
+          printf '%s\n' '# deskTAB Chrome prebuilt runtime' '' \
+            'Generated automatically. Contains the prebuilt ARM64 Ubuntu + XFCE + Google Chrome runtime used by the Android fast installer.' > README.md
           git add -f runtime README.md
           git commit -m "Update prebuilt ARM64 runtime ($GITHUB_SHA)"
           git push --force origin HEAD:runtime-image
