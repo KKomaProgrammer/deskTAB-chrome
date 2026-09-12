@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 APP_PACKAGE="com.kkomaprogrammer.desktabchrome"
+APP_RECEIVER="$APP_PACKAGE/.SetupDoneReceiver"
 STATE_DIR="$HOME/.desktab"
 CACHE_DIR="$STATE_DIR/runtime-cache"
 RUNTIME_BASE="https://raw.githubusercontent.com/KKomaProgrammer/deskTAB-chrome/runtime-image/runtime"
@@ -11,13 +12,13 @@ mkdir -p "$STATE_DIR" "$CACHE_DIR"
 progress() {
   local pct="$1" eta="$2"; shift 2
   CURRENT_STAGE="$*"
-  /system/bin/am broadcast -a "$APP_PACKAGE.SETUP_PROGRESS" -p "$APP_PACKAGE" \
+  /system/bin/am broadcast -n "$APP_RECEIVER" -a "$APP_PACKAGE.SETUP_PROGRESS" \
     --ei progress "$pct" --el eta "$eta" --es stage "$CURRENT_STAGE" >/dev/null 2>&1 || true
 }
 
 failed() {
   local code=$?
-  /system/bin/am broadcast -a "$APP_PACKAGE.SETUP_FAILED" -p "$APP_PACKAGE" \
+  /system/bin/am broadcast -n "$APP_RECEIVER" -a "$APP_PACKAGE.SETUP_FAILED" \
     --es stage "실패: $CURRENT_STAGE (exit $code)" >/dev/null 2>&1 || true
   exit "$code"
 }
@@ -41,16 +42,23 @@ if [ "$ARCH" != "aarch64" ]; then
   exit 41
 fi
 
-# 이 방송이 오면 앱은 Termux RUN_COMMAND가 실제로 시작됐음을 확인할 수 있다.
+# 앱이 Termux 명령의 실제 시작을 즉시 확인하게 한다.
 progress 2 285 "Termux 명령 실행 확인 · 저장소 초기화"
 mkdir -p "$PREFIX/etc/apt/sources.list.d"
 printf '%s\n' 'deb https://packages.termux.dev/apt/termux-main stable main' > "$PREFIX/etc/apt/sources.list"
 printf '%s\n' 'deb https://packages.termux.dev/apt/termux-x11 x11 main' > "$PREFIX/etc/apt/sources.list.d/x11.list"
 apt-get update -o Acquire::Languages=none -o Acquire::Retries=3
 
-# curl/xz/tar/ca-certificates는 Termux 핵심 bootstrap에 이미 포함된다.
 progress 7 250 "X11 · PRoot · 오디오 최소 구성 설치"
 apt-get install -y termux-x11-nightly proot-distro pulseaudio
+
+# 설치가 끝날 때까지 기다리지 않고 X11 서버를 바로 올린다.
+# 사용자가 Termux:X11을 열었을 때 'Not connected'가 계속 남지 않게 한다.
+progress 9 235 "Termux:X11 :1 서버 시작"
+export XDG_RUNTIME_DIR="$TMPDIR"
+pkill -f 'termux-x11 :1' >/dev/null 2>&1 || true
+nohup termux-x11 :1 >/dev/null 2>&1 &
+sleep 2
 
 progress 11 220 "사전 구성 Linux 이미지 정보 확인"
 MANIFEST="$CACHE_DIR/manifest.txt"
@@ -69,7 +77,6 @@ if [ "$FORMAT" != "xz" ]; then
   exit 45
 fi
 
-# GitHub raw CDN에서 조각 6개를 동시에 받고, 중단된 조각은 이어받는다.
 progress 13 205 "Linux 이미지 병렬 다운로드 시작 ($PART_COUNT개 조각)"
 export CACHE_DIR RUNTIME_BASE
 awk '$1=="PART"{print $2}' "$MANIFEST" | \
@@ -150,6 +157,11 @@ if ! pgrep -f "termux-x11 :1" >/dev/null 2>&1; then
   sleep 1
 fi
 pulseaudio --start --exit-idle-time=-1 >/dev/null 2>&1 || true
+if command -v pactl >/dev/null 2>&1; then
+  if ! pactl list modules short 2>/dev/null | grep -q 'module-native-protocol-tcp'; then
+    pactl load-module module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1 >/dev/null 2>&1 || true
+  fi
+fi
 export PULSE_SERVER=127.0.0.1
 exec proot-distro login ubuntu --shared-tmp -- /bin/bash -lc '
   export DISPLAY=:1
@@ -165,7 +177,7 @@ chmod +x "$STATE_DIR/launch.sh"
 
 rm -rf "$CACHE_DIR"
 mkdir -p "$CACHE_DIR"
-printf '%s\n' '3' > "$STATE_DIR/engine-version"
+printf '%s\n' '4' > "$STATE_DIR/engine-version"
 touch "$STATE_DIR/ready"
 progress 100 0 "고속 설정 완료"
-/system/bin/am broadcast -a "$APP_PACKAGE.SETUP_DONE" -p "$APP_PACKAGE" >/dev/null 2>&1 || true
+/system/bin/am broadcast -n "$APP_RECEIVER" -a "$APP_PACKAGE.SETUP_DONE" >/dev/null 2>&1 || true
