@@ -72,16 +72,23 @@ ROOTFS_STRUCTURE_OK=1
 for required in \
   usr/bin/bash \
   usr/bin/dpkg \
-  usr/bin/google-chrome-stable \
   usr/bin/xfce4-session \
   usr/bin/dbus-launch \
+  opt/google/chrome/google-chrome \
   var/lib/dpkg/status \
   root/.config/autostart/desktab-chrome.desktop; do
-  if [ ! -e "$NEW_ROOT/$required" ]; then
+  if [ ! -e "$NEW_ROOT/$required" ] && [ ! -L "$NEW_ROOT/$required" ]; then
     ROOTFS_STRUCTURE_OK=0
     log "해제 결과 필수 파일 누락: $required"
   fi
 done
+# /usr/bin/google-chrome-stable is commonly an absolute symlink into /opt. Testing it
+# with only -e from the Termux host would follow /opt on Android and falsely report it
+# missing, so validate the link itself here and the real target above.
+if [ ! -e "$NEW_ROOT/usr/bin/google-chrome-stable" ] && [ ! -L "$NEW_ROOT/usr/bin/google-chrome-stable" ]; then
+  ROOTFS_STRUCTURE_OK=0
+  log "해제 결과 Chrome launcher 누락: usr/bin/google-chrome-stable"
+fi
 
 if [ "$EXTRACT_RC" -ne 0 ]; then
   tail -n 30 "$EXTRACT_LOG" >&2 || true
@@ -121,6 +128,7 @@ command -v xfce4-session >/dev/null
 command -v dbus-launch >/dev/null
 test -x /usr/bin/bash
 test -x /usr/bin/dpkg
+test -x /opt/google/chrome/google-chrome
 test -f /var/lib/dpkg/status
 test -f /root/.config/autostart/desktab-chrome.desktop
 for pkg in xfce4 dbus-x11 ca-certificates curl wget gnupg xdg-utils fonts-noto fonts-noto-cjk google-chrome-stable; do
