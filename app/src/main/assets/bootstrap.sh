@@ -222,7 +222,7 @@ install_component() {
 }
 
 log "=========================================="
-log "deskTAB Chrome Linux bootstrap v6.3 시작"
+log "deskTAB Chrome Linux bootstrap v6.4 시작"
 log "HOME=$HOME"
 log "PREFIX=${PREFIX:-<unset>}"
 log "ARCH=$(uname -m)"
@@ -389,65 +389,138 @@ if [ "${#DOWNLOAD_PIDS[@]}" -gt 0 ]; then
 fi
 update_download_progress
 
+# v6.4: 앞 단계는 그대로 유지하고 무결성 검사/복구만 원자적으로 수행한다.
+repair_part_atomically() {
+  local part="$1" expected_size="$2" expected_sha="$3"
+  local target="$CACHE_DIR/$part" tmp="$CACHE_DIR/.${part}.repair.$$"
+  local attempt url code actual_size actual_sha
+  rm -f "$tmp"
+
+  for attempt in 1 2 3 4 5 6; do
+    progress 79 45 "무결성 검사 · $part 복구 다운로드 (${attempt}/6)"
+    rm -f "$tmp"
+    if [ $((attempt % 2)) -eq 1 ]; then
+      url="$RUNTIME_BASE/$part?repair=${attempt}-$(date +%s)"
+    else
+      url="https://github.com/KKomaProgrammer/deskTAB-chrome/raw/refs/heads/runtime-image/runtime/$part?repair=${attempt}-$(date +%s)"
+    fi
+
+    set +e
+    curl -fL --retry 4 --retry-delay 1 --connect-timeout 15 --max-time 240 "$url" -o "$tmp"
+    code=$?
+    set -e
+    if [ "$code" -ne 0 ] || [ ! -f "$tmp" ]; then
+      log "$part 복구 다운로드 실패(code=$code), 재시도합니다."
+      sleep 2
+      continue
+    fi
+
+    actual_size="$(stat -c %s "$tmp" 2>/dev/null || echo 0)"
+    if [ "$actual_size" != "$expected_size" ]; then
+      log "$part 복구 파일 크기 불일치: $actual_size/$expected_size"
+      rm -f "$tmp"
+      sleep 1
+      continue
+    fi
+
+    actual_sha="$(sha256sum "$tmp" 2>/dev/null | awk '{print $1}' || true)"
+    if [ "$actual_sha" != "$expected_sha" ]; then
+      log "$part 복구 파일 SHA 불일치"
+      rm -f "$tmp"
+      sleep 1
+      continue
+    fi
+
+    mv -f "$tmp" "$target"
+    sync "$target" >/dev/null 2>&1 || true
+    return 0
+  done
+
+  rm -f "$tmp"
+  return 1
+}
+
 progress 79 45 "다운로드 완료 · 무결성 검사"
-VERIFY_ROUND=0
-while true; do
-  VERIFY_ROUND=$((VERIFY_ROUND + 1))
-  VERIFY_FAILED=0
+while read -r kind part size sha; do
+  [ "$kind" = "PART" ] || continue
+  part_path="$CACHE_DIR/$part"
+  actual_size=0
+  actual_sha=""
 
-  while read -r kind part size sha; do
-    [ "$kind" = "PART" ] || continue
-    part_path="$CACHE_DIR/$part"
+  if [ -f "$part_path" ]; then
     actual_size="$(stat -c %s "$part_path" 2>/dev/null || echo 0)"
-
-    if [ ! -f "$part_path" ] || [ "$actual_size" != "$size" ]; then
-      progress 79 45 "무결성 검사 · $part 누락/크기 오류 자동 복구"
-      rm -f "$part_path"
-      if ! download_part "$part" "$size"; then
-        VERIFY_FAILED=1
-        break
-      fi
-      actual_size="$(stat -c %s "$part_path" 2>/dev/null || echo 0)"
-      if [ ! -f "$part_path" ] || [ "$actual_size" != "$size" ]; then
-        VERIFY_FAILED=1
-        break
-      fi
-    fi
-
-    actual_sha="$(sha256sum "$part_path" 2>/dev/null | awk '{print $1}' || true)"
-    if [ "$actual_sha" != "$sha" ]; then
-      progress 79 45 "무결성 검사 · $part SHA 오류 자동 복구"
-      rm -f "$part_path"
-      if ! download_part "$part" "$size"; then
-        VERIFY_FAILED=1
-        break
-      fi
-      actual_size="$(stat -c %s "$part_path" 2>/dev/null || echo 0)"
+    if [ "$actual_size" = "$size" ]; then
       actual_sha="$(sha256sum "$part_path" 2>/dev/null | awk '{print $1}' || true)"
-      if [ "$actual_size" != "$size" ] || [ "$actual_sha" != "$sha" ]; then
-        VERIFY_FAILED=1
-        break
-      fi
     fi
-  done < "$MANIFEST"
-
-  if [ "$VERIFY_FAILED" -eq 0 ]; then
-    break
   fi
-  if [ "$VERIFY_ROUND" -ge 3 ]; then
-    echo "Runtime part integrity repair failed after $VERIFY_ROUND attempts" >&2
+
+  if [ "$actual_size" = "$size" ] && [ "$actual_sha" = "$sha" ]; then
+    continue
+  fi
+
+  if [ "$actual_size" != "$size" ]; then
+    progress 79 45 "무결성 검사 · $part 누락/크기 오류 복구"
+  else
+    progress 79 45 "무결성 검사 · $part SHA 오류 복구"
+  fi
+
+  if ! repair_part_atomically "$part" "$size" "$sha"; then
+    progress 79 0 "무결성 검사 실패 · $part 복구 6회 실패"
+    echo "Runtime part repair failed: $part" >&2
     exit 43
   fi
-  progress 79 45 "무결성 검사 · 손상 조각 재검사 (${VERIFY_ROUND}/3)"
+
+done < "$MANIFEST"
+
+# 복구가 끝난 뒤 모든 조각을 한 번 더 명시적으로 확인한다.
+while read -r kind part size sha; do
+  [ "$kind" = "PART" ] || continue
+  part_path="$CACHE_DIR/$part"
+  if [ ! -f "$part_path" ]; then
+    progress 79 0 "무결성 검사 실패 · $part 재검사 중 파일 없음"
+    exit 43
+  fi
+  actual_size="$(stat -c %s "$part_path" 2>/dev/null || echo 0)"
+  if [ "$actual_size" != "$size" ]; then
+    progress 79 0 "무결성 검사 실패 · $part 재검사 크기 오류"
+    exit 43
+  fi
+  actual_sha="$(sha256sum "$part_path" 2>/dev/null | awk '{print $1}' || true)"
+  if [ "$actual_sha" != "$sha" ]; then
+    progress 79 0 "무결성 검사 실패 · $part 재검사 SHA 오류"
+    exit 43
+  fi
+done < "$MANIFEST"
+
+# 전체 아카이브 SHA도 set -e에 즉시 죽지 않도록 명시적으로 결과를 받는다.
+PART_PATHS=()
+while read -r kind part _ _; do
+  [ "$kind" = "PART" ] || continue
+  PART_PATHS+=("$CACHE_DIR/$part")
+done < "$MANIFEST"
+
+CALC_SHA=""
+HASH_CODE=1
+for HASH_ATTEMPT in 1 2 3; do
+  set +e
+  CALC_SHA="$(cat "${PART_PATHS[@]}" 2>/dev/null | sha256sum | awk '{print $1}')"
+  HASH_CODE=$?
+  set -e
+  if [ "$HASH_CODE" -eq 0 ] && [ "$CALC_SHA" = "$ARCHIVE_SHA" ]; then
+    break
+  fi
+  progress 79 30 "전체 Linux 이미지 SHA 재검사 (${HASH_ATTEMPT}/3)"
+  sleep 1
 done
 
-CALC_SHA="$({
-  while read -r kind part _ _; do
-    [ "$kind" = "PART" ] || continue
-    cat "$CACHE_DIR/$part"
-  done < "$MANIFEST"
-} | sha256sum | awk '{print $1}')"
-[ "$CALC_SHA" = "$ARCHIVE_SHA" ] || { echo "Archive checksum mismatch" >&2; exit 44; }
+if [ "$HASH_CODE" -ne 0 ]; then
+  progress 79 0 "무결성 검사 실패 · 전체 이미지 SHA 계산 실패"
+  exit 44
+fi
+if [ "$CALC_SHA" != "$ARCHIVE_SHA" ]; then
+  progress 79 0 "무결성 검사 실패 · 전체 이미지 SHA 불일치"
+  exit 44
+fi
 
 progress 82 38 "Ubuntu + XFCE + Chrome 이미지 고속 해제"
 LEGACY_ROOT="$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu"
