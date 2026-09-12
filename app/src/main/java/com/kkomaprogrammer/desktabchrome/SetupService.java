@@ -33,8 +33,8 @@ public class SetupService extends Service {
     public static final String ACTION_DOWNLOAD_DEPS = "com.kkomaprogrammer.desktabchrome.action.DOWNLOAD_DEPS";
     public static final String CHANNEL_ID = "desktab_setup";
     public static final int NOTIFICATION_ID = 4101;
-    public static final int ENGINE_VERSION = 3;
-    private static final long STARTUP_TIMEOUT_MS = 15000L;
+    public static final int ENGINE_VERSION = 4;
+    private static final long STARTUP_TIMEOUT_MS = 20000L;
 
     private static final String TERMUX = "com.termux";
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -60,8 +60,7 @@ public class SetupService extends Service {
             if (!p.getBoolean("setup_running", false)) return;
             if (p.getInt("setup_engine_version", 0) != ENGINE_VERSION) return;
             if (p.getInt("setup_progress", 1) > 1) return;
-            failSetup("Termux 명령이 15초 안에 시작되지 않았습니다. 2. Termux 연결 허용을 다시 실행하고, " +
-                    "Termux에서 allow-external-apps=true 명령을 Enter로 적용한 뒤 다시 시도하세요.");
+            failSetup("Termux가 실행 요청에 응답하지 않았습니다. 앱의 RUN_COMMAND 권한 또는 Termux 외부 명령 설정을 확인해 주세요. 이번 버전에서는 Termux가 돌려주는 실제 오류도 자동으로 표시됩니다.");
         }
     };
 
@@ -91,13 +90,13 @@ public class SetupService extends Service {
                         .putBoolean("ready", false)
                         .putInt("setup_engine_version", ENGINE_VERSION)
                         .putInt("setup_progress", 1)
-                        .putString("setup_stage", "Termux 실행 확인 중 · 최대 15초")
+                        .putString("setup_stage", "Termux 실행 요청 전달 중")
                         .putLong("setup_eta_base", 300)
                         .putLong("setup_eta_at", now)
                         .putLong("setup_start", now)
                         .apply();
                 startForeground(NOTIFICATION_ID, buildNotification(this,
-                        "Linux 고속 설정", "Termux 실행 확인 중 · 1% · 최대 15초", 1, false, true));
+                        "Linux 고속 설정", "Termux 실행 요청 전달 중 · 1%", 1, false, true));
                 acquireWakeLock();
                 handler.removeCallbacks(ticker);
                 handler.removeCallbacks(startupWatchdog);
@@ -152,6 +151,13 @@ public class SetupService extends Service {
     private void startBootstrap() {
         try {
             String script = readAsset("bootstrap.sh");
+
+            Intent callback = new Intent(this, TermuxResultService.class)
+                    .setAction(TermuxResultService.ACTION_BOOTSTRAP_RESULT);
+            int piFlags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_ONE_SHOT;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) piFlags |= PendingIntent.FLAG_MUTABLE;
+            PendingIntent resultIntent = PendingIntent.getService(this, 4401, callback, piFlags);
+
             Intent i = new Intent();
             i.setClassName(TERMUX, "com.termux.app.RunCommandService");
             i.setAction("com.termux.RUN_COMMAND");
@@ -159,8 +165,21 @@ public class SetupService extends Service {
             i.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", new String[]{"-s"});
             i.putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home");
             i.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true);
+            i.putExtra("com.termux.RUN_COMMAND_RUNNER", "app-shell");
             i.putExtra("com.termux.RUN_COMMAND_STDIN", script);
-            startService(i);
+            i.putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "deskTAB Linux setup");
+            i.putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Installs the deskTAB Ubuntu/XFCE/Chrome runtime.");
+            i.putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultIntent);
+
+            getSharedPreferences("state", MODE_PRIVATE).edit()
+                    .putString("setup_stage", "Termux 명령 수락 대기 중")
+                    .putString("termux_last_error", "")
+                    .apply();
+
+            android.content.ComponentName started = startService(i);
+            if (started == null) throw new IllegalStateException("RunCommandService returned null");
+        } catch (SecurityException e) {
+            failSetup("Termux RUN_COMMAND 권한이 Android에서 거부되었습니다. deskTAB Chrome 앱 정보 > 권한 > 추가 권한에서 'Termux 환경에서 명령 실행'을 허용하세요.");
         } catch (Exception e) {
             failSetup("고속 설정 시작 실패: " + e.getClass().getSimpleName() + ": " + e.getMessage());
         }
@@ -297,6 +316,7 @@ public class SetupService extends Service {
         if (handler != null) handler.removeCallbacks(startupWatchdog);
         SharedPreferences p = getSharedPreferences("state", MODE_PRIVATE);
         p.edit().putBoolean("setup_running", false).putString("setup_stage", message)
+                .putString("termux_last_error", message)
                 .putLong("setup_eta_base", 0).apply();
         updateSetupNotification(this, p.getInt("setup_progress", 0), message, 0);
         stopForeground(STOP_FOREGROUND_DETACH);
