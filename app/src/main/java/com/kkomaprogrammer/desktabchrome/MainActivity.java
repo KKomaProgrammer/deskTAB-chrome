@@ -2,6 +2,7 @@ package com.kkomaprogrammer.desktabchrome;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.PendingIntent;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
@@ -26,6 +27,8 @@ import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 
 import java.io.File;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 
 public class MainActivity extends Activity {
     private static final String TERMUX = "com.termux";
@@ -34,6 +37,7 @@ public class MainActivity extends Activity {
     private static final int REQ_RUN_PERMISSION = 2001;
     private static final int REQ_UNKNOWN_SOURCES = 2002;
     private static final int REQ_NOTIFICATIONS = 2003;
+
     private static final String ENABLE_EXTERNAL_COMMAND =
             "for f in \"$HOME/.termux/termux.properties\" \"$HOME/.config/termux/termux.properties\"; do " +
             "mkdir -p \"$(dirname \"$f\")\"; touch \"$f\"; " +
@@ -45,10 +49,14 @@ public class MainActivity extends Activity {
             "grep -H '^[[:space:]]*allow-external-apps=' \"$HOME/.termux/termux.properties\" \"$HOME/.config/termux/termux.properties\" 2>/dev/null; " +
             "echo '두 줄 모두 allow-external-apps=true 이면 완료입니다.'";
 
+    private static final String MANUAL_BOOTSTRAP_COMMAND =
+            "curl -fL --retry 5 https://raw.githubusercontent.com/KKomaProgrammer/deskTAB-chrome/main/app/src/main/assets/bootstrap.sh | bash";
+
     private TextView status, progressDetail;
     private ProgressBar progressBar;
     private android.content.SharedPreferences prefs;
     private final Handler handler = new Handler(Looper.getMainLooper());
+
     private final Runnable uiTicker = new Runnable() {
         @Override public void run() {
             refreshStatus();
@@ -63,9 +71,11 @@ public class MainActivity extends Activity {
 
         if (prefs.getBoolean("setup_running", false)
                 && prefs.getInt("setup_engine_version", 0) < SetupService.ENGINE_VERSION) {
-            prefs.edit().putBoolean("setup_running", false)
+            prefs.edit()
+                    .putBoolean("setup_running", false)
                     .putInt("setup_progress", 0)
-                    .putString("setup_stage", "구형 설치 감지 · 새 Termux 브리지로 재시작 가능")
+                    .putString("setup_stage", "이전 연결 방식 초기화 · 새 전면 Activity 브리지 사용 가능")
+                    .putString("termux_last_error", "")
                     .putLong("setup_eta_base", 0)
                     .apply();
         }
@@ -80,6 +90,7 @@ public class MainActivity extends Activity {
 
     @Override protected void onStart() {
         super.onStart();
+        handler.removeCallbacks(uiTicker);
         handler.post(uiTicker);
     }
 
@@ -138,7 +149,7 @@ public class MainActivity extends Activity {
         root.addView(button("세션 종료", v -> stopDesktop()));
 
         TextView note = new TextView(this);
-        note.setText("v1.2.3부터 Termux RUN_COMMAND를 app-shell 모드로 실행하고 Termux의 실제 실행 결과를 앱이 직접 받습니다. 외부 명령 설정은 두 지원 경로(.termux 및 .config/termux)에 동시에 적용합니다. Ubuntu/XFCE/글꼴/Chrome은 사전 구성 이미지를 병렬 다운로드해 설치합니다.");
+        note.setText("v1.2.4부터 설치 버튼을 누른 화면(Activity)에서 Termux를 직접 호출합니다. 5초 안에 app-shell이 시작되지 않으면 보이는 terminal-session 방식으로 자동 재시도합니다. X11 패키지가 준비되는 즉시 :1 서버도 자동 시작합니다.");
         note.setTextSize(13);
         note.setPadding(0, dp(20), 0, dp(8));
         root.addView(note);
@@ -194,7 +205,8 @@ public class MainActivity extends Activity {
                 "\nTermux:X11: " + (x11 ? "설치됨" : "미설치") +
                 "\nRUN_COMMAND 권한: " + (permission ? "허용됨" : "허용 필요") +
                 "\nLinux 환경: " + (ready ? "설정 완료" : (running ? "고속 백그라운드 설정 중" : "설정 필요")) +
-                "\n설치 엔진: " + (prefs.getInt("setup_engine_version", 0) >= 4 ? "고속 이미지 + 결과 브리지 v4" : "대기") +
+                "\n설치 엔진: " + (prefs.getInt("setup_engine_version", 0) >= SetupService.ENGINE_VERSION
+                    ? "전면 Activity 브리지 v" + SetupService.ENGINE_VERSION : "대기") +
                 "\n기기 ABI: " + Build.SUPPORTED_ABIS[0] +
                 (!lastError.isEmpty() ? "\n최근 Termux 오류: " + lastError : ""));
 
@@ -277,7 +289,7 @@ public class MainActivity extends Activity {
         cm.setPrimaryClip(ClipData.newPlainText("deskTAB Termux setup", ENABLE_EXTERNAL_COMMAND));
         new AlertDialog.Builder(this)
                 .setTitle("Termux 보안 설정 1회 필요")
-                .setMessage("명령을 클립보드에 복사했습니다. 이번 명령은 Termux가 지원하는 두 설정 경로에 모두 allow-external-apps=true를 적용하고 마지막에 실제 값을 출력합니다. Termux에서 붙여넣고 Enter를 누른 뒤 두 줄 모두 true인지 확인하세요.")
+                .setMessage("설정 명령을 복사했습니다. Termux에서 붙여넣고 Enter를 누르세요. 두 설정 경로에 모두 allow-external-apps=true를 적용합니다. v1.2.4에서는 실제 설치 명령은 deskTAB의 보이는 화면에서 직접 전달합니다.")
                 .setPositiveButton("Termux 열기", (d,w) -> openPackage(TERMUX))
                 .setNeutralButton("deskTAB 권한 설정", (d,w) -> openOwnAppSettings())
                 .setNegativeButton("닫기", null)
@@ -290,7 +302,7 @@ public class MainActivity extends Activity {
             return;
         }
         if (!Build.SUPPORTED_ABIS[0].contains("arm64")) {
-            Toast.makeText(this, "현재 5분 고속 이미지는 ARM64 기기를 지원합니다.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "현재 고속 이미지는 ARM64 기기를 지원합니다.", Toast.LENGTH_LONG).show();
             return;
         }
         if (checkSelfPermission(RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
@@ -299,18 +311,112 @@ public class MainActivity extends Activity {
             return;
         }
 
-        boolean runningFast = prefs.getBoolean("setup_running", false)
-                && prefs.getInt("setup_engine_version", 0) >= SetupService.ENGINE_VERSION;
-        if (runningFast) {
-            Toast.makeText(this, "이미 고속 설치가 백그라운드에서 진행 중입니다.", Toast.LENGTH_LONG).show();
+        boolean runningCurrent = prefs.getBoolean("setup_running", false)
+                && prefs.getInt("setup_engine_version", 0) == SetupService.ENGINE_VERSION;
+        if (runningCurrent && prefs.getInt("setup_progress", 0) > 1) {
+            Toast.makeText(this, "이미 고속 설치가 진행 중입니다.", Toast.LENGTH_LONG).show();
             return;
         }
 
-        prefs.edit().putString("termux_last_error", "").apply();
-        Intent i = new Intent(this, SetupService.class).setAction(SetupService.ACTION_BOOTSTRAP);
-        ContextCompat.startForegroundService(this, i);
-        Toast.makeText(this, "Termux 결과 확인 기능을 포함한 고속 Linux 설정을 시작했습니다.", Toast.LENGTH_LONG).show();
+        long now = System.currentTimeMillis();
+        prefs.edit()
+                .putBoolean("setup_running", true)
+                .putBoolean("ready", false)
+                .putInt("setup_engine_version", SetupService.ENGINE_VERSION)
+                .putInt("setup_progress", 1)
+                .putString("setup_stage", "deskTAB 화면에서 Termux 직접 호출 중")
+                .putString("termux_last_error", "")
+                .putLong("setup_eta_base", 300)
+                .putLong("setup_eta_at", now)
+                .putLong("setup_start", now)
+                .apply();
+
+        // 먼저 추적용 foreground service를 올린다. 상태를 미리 current engine으로 기록했으므로
+        // SetupService는 Termux를 다시 호출하지 않고 진행률/알림만 추적한다.
+        ContextCompat.startForegroundService(this,
+                new Intent(this, SetupService.class).setAction(SetupService.ACTION_BOOTSTRAP));
+
+        try {
+            startBootstrapFromForegroundActivity(false);
+            Toast.makeText(this, "Termux에 직접 설치 명령을 전달했습니다.", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            prefs.edit().putString("termux_last_error", e.getClass().getSimpleName() + ": " + e.getMessage()).apply();
+        }
+
+        // app-shell이 삼성/Android 정책으로 막히는 경우 5초 후 보이는 terminal-session으로 자동 재시도한다.
+        handler.postDelayed(() -> {
+            if (!prefs.getBoolean("setup_running", false)) return;
+            if (prefs.getInt("setup_engine_version", 0) != SetupService.ENGINE_VERSION) return;
+            if (prefs.getInt("setup_progress", 1) > 1) return;
+            prefs.edit().putString("setup_stage", "app-shell 무응답 · 보이는 Termux 세션으로 자동 재시도").apply();
+            try {
+                startBootstrapFromForegroundActivity(true);
+                Toast.makeText(MainActivity.this,
+                        "백그라운드 호출이 막혀 보이는 Termux 세션으로 자동 재시도했습니다.",
+                        Toast.LENGTH_LONG).show();
+            } catch (Exception e) {
+                prefs.edit().putString("termux_last_error", e.getClass().getSimpleName() + ": " + e.getMessage()).apply();
+            }
+        }, 5000);
+
+        // 두 공식 RUN_COMMAND 모드가 모두 차단된 특수 ROM에서는 수동 1회 실행용 명령을 자동 준비한다.
+        handler.postDelayed(() -> {
+            if (!prefs.getBoolean("setup_running", false)) return;
+            if (prefs.getInt("setup_progress", 1) > 1) return;
+            ClipboardManager cm = (ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(ClipData.newPlainText("deskTAB emergency bootstrap", MANUAL_BOOTSTRAP_COMMAND));
+            prefs.edit().putString("setup_stage", "Android가 Termux API를 차단함 · 긴급 직접 실행 명령을 클립보드에 준비").apply();
+        }, 12000);
+
         refreshStatus();
+    }
+
+    private void startBootstrapFromForegroundActivity(boolean visibleTerminal) throws Exception {
+        String script = readAsset("bootstrap.sh");
+
+        Intent callback = new Intent(this, TermuxResultService.class)
+                .setAction(TermuxResultService.ACTION_BOOTSTRAP_RESULT);
+        int piFlags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_ONE_SHOT;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) piFlags |= PendingIntent.FLAG_MUTABLE;
+        PendingIntent resultIntent = PendingIntent.getService(this,
+                visibleTerminal ? 4502 : 4501, callback, piFlags);
+
+        Intent i = new Intent();
+        i.setClassName(TERMUX, "com.termux.app.RunCommandService");
+        i.setAction("com.termux.RUN_COMMAND");
+        i.putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash");
+        i.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", new String[]{"-s"});
+        i.putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home");
+        i.putExtra("com.termux.RUN_COMMAND_STDIN", script);
+        i.putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultIntent);
+        i.putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "deskTAB Linux setup");
+        i.putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "deskTAB Ubuntu/XFCE/Chrome runtime setup");
+
+        if (visibleTerminal) {
+            i.putExtra("com.termux.RUN_COMMAND_BACKGROUND", false);
+            i.putExtra("com.termux.RUN_COMMAND_RUNNER", "terminal-session");
+            i.putExtra("com.termux.RUN_COMMAND_SESSION_ACTION", "0");
+            i.putExtra("com.termux.RUN_COMMAND_SHELL_NAME", "deskTAB Setup");
+            i.putExtra("com.termux.RUN_COMMAND_SHELL_CREATE_MODE", "always");
+        } else {
+            i.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true);
+            i.putExtra("com.termux.RUN_COMMAND_RUNNER", "app-shell");
+        }
+
+        android.content.ComponentName started = startService(i);
+        if (started == null) throw new IllegalStateException("Termux RunCommandService returned null");
+    }
+
+    private String readAsset(String name) throws Exception {
+        try (InputStream in = getAssets().open(name)) {
+            byte[] buf = new byte[8192];
+            StringBuilder b = new StringBuilder();
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                b.append(new String(buf, 0, n, StandardCharsets.UTF_8));
+            }
+            return b.toString();
+        }
     }
 
     private void launchDesktopChrome() {
