@@ -31,7 +31,7 @@ jobs:
           mkdir -p /tmp/desktab-publish
           docker build --pull -t desktab-runtime:arm64 runtime
 
-          # Fail the build before publishing if any required desktop component is absent.
+          # Fail before publishing if a required desktop package/binary is absent.
           docker run --rm desktab-runtime:arm64 /bin/bash -lc '
             set -e
             test "$(dpkg --print-architecture)" = arm64
@@ -39,7 +39,9 @@ jobs:
             command -v xfce4-session >/dev/null
             command -v dbus-launch >/dev/null
             test -f /root/.config/autostart/desktab-chrome.desktop
-            dpkg-query -W -f="${Status}\n" xfce4 dbus-x11 ca-certificates curl wget gnupg xdg-utils fonts-noto fonts-noto-cjk google-chrome-stable | grep -v "install ok installed" && exit 1 || true
+            for pkg in xfce4 dbus-x11 ca-certificates curl wget gnupg xdg-utils fonts-noto fonts-noto-cjk google-chrome-stable; do
+              dpkg -s "$pkg" >/dev/null 2>&1
+            done
           '
 
           CID=$(docker create desktab-runtime:arm64)
