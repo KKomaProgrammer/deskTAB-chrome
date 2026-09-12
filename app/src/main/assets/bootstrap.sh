@@ -90,9 +90,27 @@ kill_tree() {
   kill -TERM "$parent" >/dev/null 2>&1 || true
 }
 
+cleanup_stale_desktab_pkg_processes() {
+  local pid ppid args
+  while read -r pid ppid args; do
+    [ -n "${pid:-}" ] || continue
+    [ "$pid" = "$$" ] && continue
+    [ -n "$HEARTBEAT_LOOP_PID" ] && [ "$pid" = "$HEARTBEAT_LOOP_PID" ] && continue
+    case "$args" in
+      *"apt-get update -o Acquire::Languages=none -o Acquire::Retries=3"*|\
+      *"apt-get install -y termux-x11-nightly proot-distro pulseaudio"*|\
+      *"apt-get install -y x11-repo"*)
+        log "이전 deskTAB 패키지 작업 정리: PID $pid"
+        kill_tree "$pid"
+        ;;
+    esac
+  done < <(ps_table)
+}
+
 cleanup_legacy_desktab_processes() {
   local pid ppid args
   local found=0
+  # 이 함수는 현재 heartbeat loop를 시작하기 전에 한 번만 호출한다.
   while read -r pid ppid args; do
     [ -n "${pid:-}" ] || continue
     [ "$pid" = "$$" ] && continue
@@ -106,18 +124,7 @@ cleanup_legacy_desktab_processes() {
   done < <(ps_table)
 
   [ "$found" = "0" ] || sleep 2
-
-  while read -r pid ppid args; do
-    [ -n "${pid:-}" ] || continue
-    case "$args" in
-      *"apt-get update -o Acquire::Languages=none -o Acquire::Retries=3"*|\
-      *"apt-get install -y termux-x11-nightly proot-distro pulseaudio"*|\
-      *"apt-get install -y x11-repo"*)
-        log "이전 deskTAB 패키지 작업 정리: PID $pid"
-        kill_tree "$pid"
-        ;;
-    esac
-  done < <(ps_table)
+  cleanup_stale_desktab_pkg_processes
   sleep 1
   rm -f "$LEGACY_PID_FILE" >/dev/null 2>&1 || true
 }
@@ -166,7 +173,7 @@ run_pkg() {
       write_heartbeat
       broadcast_progress "$CURRENT_PCT" "$CURRENT_ETA" "$CURRENT_STAGE"
       if [ "$attempt" -eq 5 ]; then
-        cleanup_legacy_desktab_processes
+        cleanup_stale_desktab_pkg_processes
       fi
       if [ "$attempt" -lt 45 ]; then
         sleep 2
@@ -198,11 +205,12 @@ CURRENT_PCT=2
 CURRENT_ETA=290
 CURRENT_STAGE="이전 deskTAB 작업 정리 및 패키지 잠금 복구"
 write_heartbeat
-heartbeat_loop &
-HEARTBEAT_LOOP_PID=$!
 broadcast_progress "$CURRENT_PCT" "$CURRENT_ETA" "$CURRENT_STAGE"
 
+# heartbeat 보조 프로세스를 만들기 전에 v5 이하의 남은 프로세스를 정리한다.
 cleanup_legacy_desktab_processes
+heartbeat_loop &
+HEARTBEAT_LOOP_PID=$!
 
 ARCH="$(uname -m)"
 if [ "$ARCH" != "aarch64" ]; then
