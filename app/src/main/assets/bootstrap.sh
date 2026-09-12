@@ -12,8 +12,9 @@ pkg update -y
 pkg install -y x11-repo
 pkg install -y termux-x11-nightly proot-distro pulseaudio
 
-ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu"
-if [ ! -d "$ROOTFS" ]; then
+LEGACY_ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu"
+MODERN_ROOTFS="$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs"
+if [ ! -d "$LEGACY_ROOTFS" ] && [ ! -d "$MODERN_ROOTFS" ]; then
   log "Installing Ubuntu..."
   proot-distro install ubuntu
 else
@@ -68,10 +69,16 @@ if ! pgrep -f "termux-x11 :1" >/dev/null 2>&1; then
 fi
 
 pulseaudio --start --exit-idle-time=-1 >/dev/null 2>&1 || true
+if command -v pactl >/dev/null 2>&1; then
+  if ! pactl list modules short 2>/dev/null | grep -q 'module-native-protocol-tcp'; then
+    pactl load-module module-native-protocol-tcp auth-ip-acl=127.0.0.1 auth-anonymous=1 >/dev/null 2>&1 || true
+  fi
+fi
 
 exec proot-distro login ubuntu --shared-tmp -- /bin/bash -lc '
   export DISPLAY=:1
   export XDG_RUNTIME_DIR=/tmp/runtime-root
+  export PULSE_SERVER=127.0.0.1
   mkdir -p "$XDG_RUNTIME_DIR"
   chmod 700 "$XDG_RUNTIME_DIR"
   pkill -f google-chrome-stable >/dev/null 2>&1 || true
