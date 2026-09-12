@@ -222,7 +222,7 @@ install_component() {
 }
 
 log "=========================================="
-log "deskTAB Chrome Linux bootstrap v7.0 시작"
+log "deskTAB Chrome Linux bootstrap v8.0 시작"
 log "HOME=$HOME"
 log "PREFIX=${PREFIX:-<unset>}"
 log "ARCH=$(uname -m)"
@@ -542,45 +542,60 @@ while read -r kind part size sha; do
   exit 43
 done < "$MANIFEST"
 
-progress 79 30 "모든 조각 검증 완료 · 전체 이미지 SHA 확인"
-PART_PATHS=()
-while read -r kind part _ _; do
+progress 79 35 "모든 조각 검증 완료 · 단일 XZ 이미지 조립"
+ARCHIVE_FILE="$CACHE_DIR/runtime-arm64.tar.xz"
+ARCHIVE_TMP="$CACHE_DIR/.runtime-arm64.tar.xz.assembling"
+rm -f "$ARCHIVE_TMP"
+if ! : > "$ARCHIVE_TMP"; then
+  progress 79 0 "Linux 이미지 조립 파일 생성 실패 · 저장공간/파일시스템 확인"
+  exit 44
+fi
+
+ASSEMBLED_SIZE=0
+while read -r kind part size sha; do
   [ "$kind" = "PART" ] || continue
-  PART_PATHS+=("$CACHE_DIR/$part")
+  part_path="$CACHE_DIR/$part"
+  # 79%에 들어오기 전에 이미 검증했지만, 조립 직전에도 다시 확인한다.
+  if ! verify_part_file "$part_path" "$size" "$sha"; then
+    rm -f "$ARCHIVE_TMP"
+    progress 78 0 "Linux 이미지 조각이 조립 직전에 변경됨 · $part"
+    exit 43
+  fi
+  if ! cat "$part_path" >> "$ARCHIVE_TMP"; then
+    rm -f "$ARCHIVE_TMP"
+    progress 79 0 "Linux 이미지 조립 실패 · $part 읽기/저장 오류"
+    exit 44
+  fi
+  ASSEMBLED_SIZE=$((ASSEMBLED_SIZE + size))
+  ASSEMBLY_PCT=$((79 + ASSEMBLED_SIZE * 2 / TOTAL_SIZE))
+  [ "$ASSEMBLY_PCT" -gt 81 ] && ASSEMBLY_PCT=81
+  progress "$ASSEMBLY_PCT" 25 "검증된 Linux 이미지 조립 $((ASSEMBLED_SIZE / 1048576))/$((TOTAL_SIZE / 1048576))MB"
 done < "$MANIFEST"
 
-calculate_archive_sha() (
-  trap - ERR
-  set +e
-  set +E
-  set -o pipefail
-  cat "$@" | sha256sum
-)
-
-if HASH_LINE="$(calculate_archive_sha "${PART_PATHS[@]}")"; then
-  CALC_SHA="${HASH_LINE%% *}"
-else
-  progress 79 0 "전체 Linux 이미지 SHA 계산 실패"
-  exit 44
-fi
-if [ "$CALC_SHA" != "$ARCHIVE_SHA" ]; then
-  progress 79 0 "전체 Linux 이미지 SHA 불일치 · manifest/runtime 버전 불일치"
+ACTUAL_ARCHIVE_SIZE="$(stat -c %s "$ARCHIVE_TMP" 2>/dev/null || printf '0')"
+if [ "$ACTUAL_ARCHIVE_SIZE" != "$TOTAL_SIZE" ]; then
+  rm -f "$ARCHIVE_TMP"
+  progress 81 0 "Linux 이미지 조립 크기 불일치 · ${ACTUAL_ARCHIVE_SIZE}/${TOTAL_SIZE} bytes"
   exit 44
 fi
 
-validate_xz_archive() (
-  trap - ERR
-  set +e
-  set +E
-  set -o pipefail
-  cat "$@" | xz -t
-)
+# 각 part가 고정된 manifest의 SHA-256을 모두 통과했으므로 이 파일의 바이트열은
+# manifest가 지정한 아카이브와 동일하다. 이전의 cat|sha256sum 전체 파이프 검사는
+# Termux에서 불필요한 실패 지점이었으므로 제거한다. 단일 파일 XZ 검증으로 최종 확인한다.
+mv -f "$ARCHIVE_TMP" "$ARCHIVE_FILE"
+sync "$ARCHIVE_FILE" >/dev/null 2>&1 || true
 
-progress 80 24 "Linux 이미지 XZ 구조 검사"
-if ! validate_xz_archive "${PART_PATHS[@]}"; then
-  progress 80 0 "Linux 이미지 XZ 구조 손상"
+progress 81 20 "단일 Linux XZ 이미지 구조 확인"
+if ! xz -t "$ARCHIVE_FILE"; then
+  progress 81 0 "Linux XZ 이미지 구조 검사 실패"
   exit 45
 fi
+
+# 단일 아카이브가 완성됐으므로 분할 조각을 제거해 압축 해제 공간을 확보한다.
+while read -r kind part _ _; do
+  [ "$kind" = "PART" ] || continue
+  rm -f "$CACHE_DIR/$part"
+done < "$MANIFEST"
 
 progress 82 38 "Ubuntu + XFCE + Chrome 이미지 고속 해제"
 LEGACY_ROOT="$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu"
@@ -592,22 +607,14 @@ mkdir -p "$(dirname "$LEGACY_ROOT")" "$(dirname "$MODERN_CONTAINER")"
 rm -rf "$NEW_ROOT" "$BACKUP_LEGACY" "$BACKUP_MODERN"
 mkdir -p "$NEW_ROOT"
 
-extract_runtime() (
-  trap - ERR
-  set +e
-  set +E
-  set -o pipefail
-  local dest="$1"; shift
-  cat "$@" | xz -dc | tar -xpf - -C "$dest"
-)
-
-if ! extract_runtime "$NEW_ROOT" "${PART_PATHS[@]}"; then
+# 파이프 없이 GNU tar가 XZ 파일을 직접 읽게 해 SIGPIPE/pipefail 계열 실패를 제거한다.
+if ! tar -xJpf "$ARCHIVE_FILE" -C "$NEW_ROOT"; then
   rm -rf "$NEW_ROOT"
-  progress 82 0 "Linux 이미지 압축 해제 실패 · 기존 환경 유지"
+  progress 82 0 "Linux 이미지 압축 해제 실패 · 기존 환경 유지 · 저장공간 확인"
   exit 46
 fi
 
-# 네트워크 파일 구성도 새 rootfs에서 먼저 끝낸다. 여기서 실패해도 기존 환경은 untouched 상태다.
+# 새 rootfs 준비는 기존 환경을 건드리기 전에 모두 끝낸다.
 if ! mkdir -p "$NEW_ROOT/etc"; then
   rm -rf "$NEW_ROOT"
   progress 82 0 "새 Linux 환경 준비 실패 · 기존 환경 유지"
@@ -617,7 +624,7 @@ rm -f "$NEW_ROOT/etc/resolv.conf"
 printf '%s\n' 'nameserver 8.8.8.8' 'nameserver 8.8.4.4' > "$NEW_ROOT/etc/resolv.conf"
 printf '%s\n' '127.0.0.1 localhost' '::1 localhost' > "$NEW_ROOT/etc/hosts"
 
-# 디렉터리 rename은 같은 Termux 파일시스템 안에서 원자적이다. 각 단계 실패 시 즉시 원상복구한다.
+# 같은 Termux 파일시스템 안의 rename으로 교체한다. 어느 단계든 실패하면 기존 환경 복원.
 SWAP_OK=1
 if [ -d "$LEGACY_ROOT" ] && ! mv "$LEGACY_ROOT" "$BACKUP_LEGACY"; then
   SWAP_OK=0
@@ -638,15 +645,16 @@ if [ "$SWAP_OK" -ne 1 ]; then
 fi
 
 progress 94 16 "Linux 네트워크 및 PRoot 확인"
-if proot-distro login ubuntu --shared-tmp -- /bin/bash -lc 'mkdir -p /tmp/runtime-root; chmod 700 /tmp/runtime-root; true'; then
+if proot-distro login ubuntu --shared-tmp -- /bin/bash -lc 'mkdir -p /tmp/runtime-root; chmod 700 /tmp/runtime-root; command -v google-chrome-stable >/dev/null; command -v xfce4-session >/dev/null'; then
   rm -rf "$BACKUP_LEGACY" "$BACKUP_MODERN"
 else
   rm -rf "$LEGACY_ROOT" "$MODERN_CONTAINER"
   [ -d "$BACKUP_LEGACY" ] && mv "$BACKUP_LEGACY" "$LEGACY_ROOT"
   [ -d "$BACKUP_MODERN" ] && mv "$BACKUP_MODERN" "$MODERN_CONTAINER"
-  progress 94 0 "PRoot 첫 로그인 실패 · 기존 환경 복원 완료"
+  progress 94 0 "PRoot/Chrome/XFCE 확인 실패 · 기존 환경 복원 완료"
   exit 47
 fi
+
 progress 97 7 "원클릭 Chrome 실행 환경 구성"
 cat >"$STATE_DIR/launch.sh" <<'LAUNCH'
 #!/data/data/com.termux/files/usr/bin/bash
@@ -677,7 +685,7 @@ chmod +x "$STATE_DIR/launch.sh"
 
 rm -rf "$CACHE_ROOT"
 mkdir -p "$CACHE_ROOT"
-printf '%s\n' '7' > "$STATE_DIR/engine-version"
+printf '%s\n' '8' > "$STATE_DIR/engine-version"
 touch "$STATE_DIR/ready"
 progress 100 0 "고속 설정 완료"
 /system/bin/am broadcast -n "$APP_RECEIVER" -a "$APP_PACKAGE.SETUP_DONE" >/dev/null 2>&1 || true

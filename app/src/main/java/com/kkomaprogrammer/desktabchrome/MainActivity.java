@@ -41,7 +41,7 @@ public class MainActivity extends Activity {
     private static final int REQ_RUN_PERMISSION = 2001;
     private static final int REQ_UNKNOWN_SOURCES = 2002;
     private static final int REQ_NOTIFICATIONS = 2003;
-    private static final int ENGINE_VERSION = 7;
+    private static final int ENGINE_VERSION = 8;
 
     private static final String TERMUX_BOOTSTRAP_PATH =
             "/data/data/com.termux/files/home/desktab-bootstrap.sh";
@@ -158,7 +158,7 @@ public class MainActivity extends Activity {
         root.addView(button("세션 종료", v -> stopDesktop()));
 
         TextView note = new TextView(this);
-        note.setText("v1.2.13은 런타임 버전을 고정하고 각 조각의 크기와 SHA-256을 다운로드 단계에서 검증합니다. 검증된 파일만 설치에 사용하며, 압축 해제와 PRoot 전환 실패 시 기존 환경을 보존합니다.");
+        note.setText("v1.2.14는 검증된 조각을 단일 XZ 파일로 안전하게 조립한 뒤 파이프 없이 직접 검사·압축 해제합니다. 각 조각 SHA 검증과 기존 환경 원자적 보존은 그대로 유지합니다.");
         note.setTextSize(13);
         note.setPadding(0, dp(20), 0, dp(8));
         root.addView(note);

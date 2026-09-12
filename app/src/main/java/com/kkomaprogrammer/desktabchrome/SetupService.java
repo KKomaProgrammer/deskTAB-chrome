@@ -34,7 +34,7 @@ public class SetupService extends Service {
     public static final String ACTION_DOWNLOAD_DEPS = "com.kkomaprogrammer.desktabchrome.action.DOWNLOAD_DEPS";
     public static final String CHANNEL_ID = "desktab_setup";
     public static final int NOTIFICATION_ID = 4101;
-    public static final int ENGINE_VERSION = 7;
+    public static final int ENGINE_VERSION = 8;
 
     private static final long STARTUP_TIMEOUT_MS = 20000L;
     private static final String HEARTBEAT_PATH =
