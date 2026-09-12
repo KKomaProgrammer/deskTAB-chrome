@@ -1,0 +1,47 @@
+name: One-off final runtime fix v1.2.14
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-v1214.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply v1.2.14 runtime patch
+        run: python3 tools/patch_v1214.py
+
+      - name: Validate patched sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n app/src/main/assets/bootstrap.sh
+          grep -q "versionName '1.2.14'" app/build.gradle
+          grep -q 'versionCode 17' app/build.gradle
+          grep -q 'ENGINE_VERSION = 8' app/src/main/java/com/kkomaprogrammer/desktabchrome/MainActivity.java
+          grep -q 'ENGINE_VERSION = 8' app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java
+          grep -q 'xz -t "$ARCHIVE_FILE"' app/src/main/assets/bootstrap.sh
+          grep -q 'tar -xJpf "$ARCHIVE_FILE"' app/src/main/assets/bootstrap.sh
+          grep -q '검증된 Linux 이미지 조립' app/src/main/assets/bootstrap.sh
+          ! grep -q 'calculate_archive_sha' app/src/main/assets/bootstrap.sh
+          ! grep -q 'cat "$@" | sha256sum' app/src/main/assets/bootstrap.sh
+
+      - name: Commit v1.2.14 app changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/assets/bootstrap.sh app/build.gradle \
+            app/src/main/java/com/kkomaprogrammer/desktabchrome/MainActivity.java \
+            app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java
+          git commit -m 'Eliminate runtime SHA pipeline failures'
+          git push origin HEAD:main
