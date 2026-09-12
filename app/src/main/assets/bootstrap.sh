@@ -14,6 +14,7 @@ CURRENT_STAGE="고속 설치 시작"
 CURRENT_PCT=1
 CURRENT_ETA=300
 OWN_LOCK=0
+HEARTBEAT_LOOP_PID=""
 mkdir -p "$STATE_DIR" "$CACHE_DIR"
 
 log() {
@@ -24,6 +25,14 @@ write_heartbeat() {
   local tmp="$HEARTBEAT_FILE.tmp.$$"
   printf '%s|%s|%s|%s|%s\n' "$(date +%s)" "$$" "$CURRENT_PCT" "$CURRENT_ETA" "$CURRENT_STAGE" > "$tmp"
   mv -f "$tmp" "$HEARTBEAT_FILE"
+}
+
+heartbeat_loop() {
+  set +e
+  while true; do
+    write_heartbeat
+    sleep 2
+  done
 }
 
 broadcast_progress() {
@@ -57,6 +66,9 @@ failed() {
 
 cleanup() {
   set +e
+  if [ -n "$HEARTBEAT_LOOP_PID" ]; then
+    kill "$HEARTBEAT_LOOP_PID" >/dev/null 2>&1 || true
+  fi
   if [ "$OWN_LOCK" = "1" ] && [ -f "$LOCK_DIR/pid" ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ]; then
     rm -rf "$LOCK_DIR"
   fi
@@ -95,8 +107,6 @@ cleanup_legacy_desktab_processes() {
 
   [ "$found" = "0" ] || sleep 2
 
-  # 이전 버전이 부모 shell보다 apt-get을 오래 남긴 경우에만 정확히 deskTAB이 사용한
-  # 명령 패턴을 정리한다. 사용자가 별도로 실행한 일반 apt 작업은 건드리지 않는다.
   while read -r pid ppid args; do
     [ -n "${pid:-}" ] || continue
     case "$args" in
@@ -123,11 +133,7 @@ acquire_singleton_lock() {
   owner="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
   if [ -n "$owner" ] && kill -0 "$owner" >/dev/null 2>&1; then
     log "이미 deskTAB 설치가 실행 중입니다 (PID $owner). 두 번째 설치는 시작하지 않습니다."
-    CURRENT_PCT=2
-    CURRENT_ETA=300
-    CURRENT_STAGE="기존 deskTAB 설치가 이미 실행 중 · 중복 실행 차단"
-    write_heartbeat
-    broadcast_progress 2 300 "$CURRENT_STAGE"
+    broadcast_progress 2 300 "기존 deskTAB 설치가 이미 실행 중 · 중복 실행 차단"
     return 1
   fi
 
@@ -188,9 +194,14 @@ if ! acquire_singleton_lock; then
 fi
 trap failed ERR
 trap cleanup EXIT
+CURRENT_PCT=2
+CURRENT_ETA=290
+CURRENT_STAGE="이전 deskTAB 작업 정리 및 패키지 잠금 복구"
 write_heartbeat
+heartbeat_loop &
+HEARTBEAT_LOOP_PID=$!
+broadcast_progress "$CURRENT_PCT" "$CURRENT_ETA" "$CURRENT_STAGE"
 
-# v1.2.5 이하가 남긴 백그라운드 apt/bootstrap을 한 번 정리하고 dpkg 상태를 복구한다.
 cleanup_legacy_desktab_processes
 
 ARCH="$(uname -m)"
