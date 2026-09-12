@@ -1,0 +1,57 @@
+name: Apply v1.2.17 metadata patch
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/patch-v1217.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Patch app metadata consistently
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/MainActivity.java')
+          s = p.read_text()
+          s = s.replace('private static final int ENGINE_VERSION = 9;', 'private static final int ENGINE_VERSION = 11;')
+          s = s.replace('완전 manifest + 배열 설치 엔진 v9 준비', 'Android 호환 zstd 설치 엔진 v11 준비')
+          s = s.replace('v1.2.15는 불완전 manifest를 거부하고 모든 이미지 조각을 고정 배열로 관리합니다. 조각 수·순서·크기·SHA와 완성 XZ SHA를 모두 확인한 뒤 기존 환경을 보존한 채 설치합니다.', 'v1.2.17은 zstd 해제 작업의 ERR trap 오동작과 Android 메타데이터 호환 문제를 해결했습니다. 기존 다운로드/검증/heartbeat는 유지하고, 새 rootfs를 완전히 검증한 뒤에만 기존 환경과 교체합니다.')
+          s = s.replace('v9은 중복 실행을 자동 차단합니다.', 'v11은 중복 실행을 자동 차단합니다.')
+          s = s.replace('deskTAB Linux setup v9', 'deskTAB Linux setup v11')
+          p.write_text(s)
+
+          p = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java')
+          s = p.read_text().replace('public static final int ENGINE_VERSION = 9;', 'public static final int ENGINE_VERSION = 11;')
+          p.write_text(s)
+
+          p = Path('app/build.gradle')
+          s = p.read_text()
+          import re
+          s = re.sub(r'versionCode\s+\d+', 'versionCode 20', s)
+          s = re.sub(r"versionName\s+'[^']+'", "versionName '1.2.17'", s)
+          p.write_text(s)
+          PY
+          grep -q 'ENGINE_VERSION = 11' app/src/main/java/com/kkomaprogrammer/desktabchrome/MainActivity.java
+          grep -q 'ENGINE_VERSION = 11' app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java
+          grep -q "versionName '1.2.17'" app/build.gradle
+          bash -n app/src/main/assets/bootstrap.sh
+      - name: Commit patch
+        run: |
+          set -e
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/kkomaprogrammer/desktabchrome/MainActivity.java \
+                  app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java \
+                  app/build.gradle
+          git commit -m 'Release v1.2.17 with Termux-safe zstd extraction'
+          git push origin HEAD:main
