@@ -6,12 +6,24 @@ APP_RECEIVER="$APP_PACKAGE/.SetupDoneReceiver"
 STATE_DIR="$HOME/.desktab"
 CACHE_DIR="$STATE_DIR/runtime-cache"
 RUNTIME_BASE="https://raw.githubusercontent.com/KKomaProgrammer/deskTAB-chrome/runtime-image/runtime"
-PID_FILE="$STATE_DIR/setup.pid"
+LOCK_DIR="$STATE_DIR/bootstrap.lock"
+LEGACY_PID_FILE="$STATE_DIR/setup.pid"
+HEARTBEAT_FILE="$STATE_DIR/heartbeat"
+PKG_LOG="$STATE_DIR/package-manager.log"
 CURRENT_STAGE="고속 설치 시작"
+CURRENT_PCT=1
+CURRENT_ETA=300
+OWN_LOCK=0
 mkdir -p "$STATE_DIR" "$CACHE_DIR"
 
 log() {
   printf '[deskTAB] %s\n' "$*"
+}
+
+write_heartbeat() {
+  local tmp="$HEARTBEAT_FILE.tmp.$$"
+  printf '%s|%s|%s|%s|%s\n' "$(date +%s)" "$$" "$CURRENT_PCT" "$CURRENT_ETA" "$CURRENT_STAGE" > "$tmp"
+  mv -f "$tmp" "$HEARTBEAT_FILE"
 }
 
 broadcast_progress() {
@@ -21,8 +33,11 @@ broadcast_progress() {
 
 progress() {
   local pct="$1" eta="$2"; shift 2
+  CURRENT_PCT="$pct"
+  CURRENT_ETA="$eta"
   CURRENT_STAGE="$*"
   log "$pct% · $CURRENT_STAGE"
+  write_heartbeat
   broadcast_progress "$pct" "$eta" "$CURRENT_STAGE"
 }
 
@@ -30,21 +45,134 @@ failed() {
   local code=$?
   local line="${BASH_LINENO[0]:-?}"
   set +e
+  CURRENT_PCT=-1
+  CURRENT_ETA=0
+  CURRENT_STAGE="실패: $CURRENT_STAGE · line $line · exit $code"
   log "오류 · line $line · exit $code · $CURRENT_STAGE"
+  write_heartbeat
   /system/bin/am broadcast -n "$APP_RECEIVER" -a "$APP_PACKAGE.SETUP_FAILED" \
-    --es stage "실패: $CURRENT_STAGE · line $line · exit $code" >/dev/null 2>&1
+    --es stage "$CURRENT_STAGE" >/dev/null 2>&1
   exit "$code"
 }
 
 cleanup() {
-  rm -f "$PID_FILE" >/dev/null 2>&1 || true
+  set +e
+  if [ "$OWN_LOCK" = "1" ] && [ -f "$LOCK_DIR/pid" ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ]; then
+    rm -rf "$LOCK_DIR"
+  fi
+  if [ -f "$LEGACY_PID_FILE" ] && [ "$(cat "$LEGACY_PID_FILE" 2>/dev/null)" = "$$" ]; then
+    rm -f "$LEGACY_PID_FILE"
+  fi
 }
 
-trap failed ERR
-trap cleanup EXIT
+ps_table() {
+  ps -A -o PID=,PPID=,ARGS= 2>/dev/null || /system/bin/ps -A -o PID=,PPID=,ARGS= 2>/dev/null || true
+}
+
+kill_tree() {
+  local parent="$1" child
+  while read -r child; do
+    [ -n "$child" ] || continue
+    kill_tree "$child"
+  done < <(ps_table | awk -v p="$parent" '$2==p {print $1}')
+  kill -TERM "$parent" >/dev/null 2>&1 || true
+}
+
+cleanup_legacy_desktab_processes() {
+  local pid ppid args
+  local found=0
+  while read -r pid ppid args; do
+    [ -n "${pid:-}" ] || continue
+    [ "$pid" = "$$" ] && continue
+    case "$args" in
+      *desktab-bootstrap.sh*)
+        log "이전 deskTAB 설치 프로세스 정리: PID $pid"
+        kill_tree "$pid"
+        found=1
+        ;;
+    esac
+  done < <(ps_table)
+
+  [ "$found" = "0" ] || sleep 2
+
+  # 이전 버전이 부모 shell보다 apt-get을 오래 남긴 경우에만 정확히 deskTAB이 사용한
+  # 명령 패턴을 정리한다. 사용자가 별도로 실행한 일반 apt 작업은 건드리지 않는다.
+  while read -r pid ppid args; do
+    [ -n "${pid:-}" ] || continue
+    case "$args" in
+      *"apt-get update -o Acquire::Languages=none -o Acquire::Retries=3"*|\
+      *"apt-get install -y termux-x11-nightly proot-distro pulseaudio"*|\
+      *"apt-get install -y x11-repo"*)
+        log "이전 deskTAB 패키지 작업 정리: PID $pid"
+        kill_tree "$pid"
+        ;;
+    esac
+  done < <(ps_table)
+  sleep 1
+  rm -f "$LEGACY_PID_FILE" >/dev/null 2>&1 || true
+}
+
+acquire_singleton_lock() {
+  local owner
+  if mkdir "$LOCK_DIR" 2>/dev/null; then
+    OWN_LOCK=1
+    printf '%s\n' "$$" > "$LOCK_DIR/pid"
+    return 0
+  fi
+
+  owner="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+  if [ -n "$owner" ] && kill -0 "$owner" >/dev/null 2>&1; then
+    log "이미 deskTAB 설치가 실행 중입니다 (PID $owner). 두 번째 설치는 시작하지 않습니다."
+    CURRENT_PCT=2
+    CURRENT_ETA=300
+    CURRENT_STAGE="기존 deskTAB 설치가 이미 실행 중 · 중복 실행 차단"
+    write_heartbeat
+    broadcast_progress 2 300 "$CURRENT_STAGE"
+    return 1
+  fi
+
+  log "죽은 설치 lock을 복구합니다."
+  rm -rf "$LOCK_DIR"
+  mkdir "$LOCK_DIR"
+  OWN_LOCK=1
+  printf '%s\n' "$$" > "$LOCK_DIR/pid"
+  return 0
+}
+
+run_pkg() {
+  local label="$1"; shift
+  local attempt=0 code
+  while true; do
+    attempt=$((attempt + 1))
+    : > "$PKG_LOG"
+    set +e
+    "$@" 2>&1 | tee "$PKG_LOG"
+    code=${PIPESTATUS[0]}
+    set -e
+    if [ "$code" -eq 0 ]; then
+      return 0
+    fi
+    if grep -qiE 'Could not get lock|Unable to acquire.*lock|frontend lock.*locked|dpkg frontend lock was locked' "$PKG_LOG"; then
+      CURRENT_STAGE="$label · 다른 패키지 작업 종료 대기 (${attempt}/45)"
+      CURRENT_ETA=$((300 - attempt * 2))
+      [ "$CURRENT_ETA" -lt 30 ] && CURRENT_ETA=30
+      log "$CURRENT_STAGE"
+      write_heartbeat
+      broadcast_progress "$CURRENT_PCT" "$CURRENT_ETA" "$CURRENT_STAGE"
+      if [ "$attempt" -eq 5 ]; then
+        cleanup_legacy_desktab_processes
+      fi
+      if [ "$attempt" -lt 45 ]; then
+        sleep 2
+        continue
+      fi
+    fi
+    return "$code"
+  done
+}
 
 log "=========================================="
-log "deskTAB Chrome Linux bootstrap v5 시작"
+log "deskTAB Chrome Linux bootstrap v6 시작"
 log "HOME=$HOME"
 log "PREFIX=${PREFIX:-<unset>}"
 log "ARCH=$(uname -m)"
@@ -55,14 +183,15 @@ if [ -z "${PREFIX:-}" ] || [ ! -d "$PREFIX" ]; then
   exit 30
 fi
 
-if [ -f "$PID_FILE" ]; then
-  OLD_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
-  if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" >/dev/null 2>&1; then
-    progress 2 0 "이미 실행 중인 설치 프로세스 감지 (PID $OLD_PID)"
-    exit 0
-  fi
+if ! acquire_singleton_lock; then
+  exit 0
 fi
-printf '%s\n' "$$" > "$PID_FILE"
+trap failed ERR
+trap cleanup EXIT
+write_heartbeat
+
+# v1.2.5 이하가 남긴 백그라운드 apt/bootstrap을 한 번 정리하고 dpkg 상태를 복구한다.
+cleanup_legacy_desktab_processes
 
 ARCH="$(uname -m)"
 if [ "$ARCH" != "aarch64" ]; then
@@ -71,27 +200,23 @@ if [ "$ARCH" != "aarch64" ]; then
   exit 41
 fi
 
-progress 2 285 "Termux 로컬 bootstrap 실행 확인"
+progress 2 285 "Termux 로컬 bootstrap 실행 확인 · 중복 실행 잠금 완료"
 
-# 기존 프로세스를 pkill로 광범위하게 종료하지 않는다. 이전 버전은 이 과정에서
-# 새 shell까지 함께 종료될 가능성이 있었으므로 v5에서는 패키지 관리자가 직접
-# 잠금/복구를 처리하도록 둔다.
 if command -v dpkg >/dev/null 2>&1; then
-  dpkg --configure -a || true
+  run_pkg "dpkg 복구" dpkg --configure -a
 fi
 
 progress 3 275 "Termux 저장소 확인"
-apt-get update -o Acquire::Languages=none -o Acquire::Retries=3
+run_pkg "Termux 저장소 확인" apt-get update -o Acquire::Languages=none -o Acquire::Retries=3
 
-# x11-repo가 아직 활성화되지 않은 깨끗한 Termux에서도 공식 방식으로 추가한다.
 if ! apt-cache show termux-x11-nightly >/dev/null 2>&1; then
   progress 5 265 "공식 Termux X11 저장소 추가"
-  apt-get install -y x11-repo
-  apt-get update -o Acquire::Languages=none -o Acquire::Retries=3
+  run_pkg "X11 저장소 설치" apt-get install -y x11-repo
+  run_pkg "X11 저장소 갱신" apt-get update -o Acquire::Languages=none -o Acquire::Retries=3
 fi
 
 progress 7 250 "X11 · PRoot · 오디오 최소 구성 설치"
-apt-get install -y termux-x11-nightly proot-distro pulseaudio curl xz-utils tar coreutils procps
+run_pkg "X11 · PRoot · 오디오 설치" apt-get install -y termux-x11-nightly proot-distro pulseaudio curl xz-utils tar coreutils procps
 
 progress 9 235 "Termux:X11 :1 서버 시작"
 export XDG_RUNTIME_DIR="${TMPDIR:-$PREFIX/tmp}"
@@ -135,7 +260,6 @@ download_part() {
 }
 export -f download_part
 
-# xargs 의존성을 없애고 bash 자체 background job으로 병렬 다운로드한다.
 ACTIVE=0
 while read -r part; do
   download_part "$part" &
@@ -229,7 +353,7 @@ chmod +x "$STATE_DIR/launch.sh"
 
 rm -rf "$CACHE_DIR"
 mkdir -p "$CACHE_DIR"
-printf '%s\n' '5' > "$STATE_DIR/engine-version"
+printf '%s\n' '6' > "$STATE_DIR/engine-version"
 touch "$STATE_DIR/ready"
 progress 100 0 "고속 설정 완료"
 /system/bin/am broadcast -n "$APP_RECEIVER" -a "$APP_PACKAGE.SETUP_DONE" >/dev/null 2>&1 || true
