@@ -6,34 +6,63 @@ APP_RECEIVER="$APP_PACKAGE/.SetupDoneReceiver"
 STATE_DIR="$HOME/.desktab"
 CACHE_DIR="$STATE_DIR/runtime-cache"
 RUNTIME_BASE="https://raw.githubusercontent.com/KKomaProgrammer/deskTAB-chrome/runtime-image/runtime"
+PID_FILE="$STATE_DIR/setup.pid"
 CURRENT_STAGE="고속 설치 시작"
 mkdir -p "$STATE_DIR" "$CACHE_DIR"
+
+log() {
+  printf '[deskTAB] %s\n' "$*"
+}
+
+broadcast_progress() {
+  /system/bin/am broadcast -n "$APP_RECEIVER" -a "$APP_PACKAGE.SETUP_PROGRESS" \
+    --ei progress "$1" --el eta "$2" --es stage "$3" >/dev/null 2>&1 || true
+}
 
 progress() {
   local pct="$1" eta="$2"; shift 2
   CURRENT_STAGE="$*"
-  /system/bin/am broadcast -n "$APP_RECEIVER" -a "$APP_PACKAGE.SETUP_PROGRESS" \
-    --ei progress "$pct" --el eta "$eta" --es stage "$CURRENT_STAGE" >/dev/null 2>&1 || true
+  log "$pct% · $CURRENT_STAGE"
+  broadcast_progress "$pct" "$eta" "$CURRENT_STAGE"
 }
 
 failed() {
   local code=$?
+  local line="${BASH_LINENO[0]:-?}"
+  set +e
+  log "오류 · line $line · exit $code · $CURRENT_STAGE"
   /system/bin/am broadcast -n "$APP_RECEIVER" -a "$APP_PACKAGE.SETUP_FAILED" \
-    --es stage "실패: $CURRENT_STAGE (exit $code)" >/dev/null 2>&1 || true
+    --es stage "실패: $CURRENT_STAGE · line $line · exit $code" >/dev/null 2>&1
   exit "$code"
 }
-trap failed ERR
 
-# 이전 설치가 남아 있으면 먼저 종료해 apt/rootfs 잠금 충돌을 없앤다.
-pkill -f 'proot-distro install ubuntu' >/dev/null 2>&1 || true
-pkill -f 'proot.*installed-rootfs/ubuntu' >/dev/null 2>&1 || true
-pkill -f 'proot.*containers/ubuntu' >/dev/null 2>&1 || true
-pkill -f '[a]pt-get install.*termux-x11' >/dev/null 2>&1 || true
-pkill -f 'apt-get install -y xfce4' >/dev/null 2>&1 || true
-pkill -f 'apt-get install -y fonts-noto' >/dev/null 2>&1 || true
-pkill -f 'google-chrome-stable_current_.*deb' >/dev/null 2>&1 || true
-pkill -f '[a]pt.*update' >/dev/null 2>&1 || true
-sleep 1
+cleanup() {
+  rm -f "$PID_FILE" >/dev/null 2>&1 || true
+}
+
+trap failed ERR
+trap cleanup EXIT
+
+log "=========================================="
+log "deskTAB Chrome Linux bootstrap v5 시작"
+log "HOME=$HOME"
+log "PREFIX=${PREFIX:-<unset>}"
+log "ARCH=$(uname -m)"
+log "=========================================="
+
+if [ -z "${PREFIX:-}" ] || [ ! -d "$PREFIX" ]; then
+  echo "Termux PREFIX 환경이 없습니다." >&2
+  exit 30
+fi
+
+if [ -f "$PID_FILE" ]; then
+  OLD_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
+  if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" >/dev/null 2>&1; then
+    progress 2 0 "이미 실행 중인 설치 프로세스 감지 (PID $OLD_PID)"
+    exit 0
+  fi
+fi
+printf '%s\n' "$$" > "$PID_FILE"
 
 ARCH="$(uname -m)"
 if [ "$ARCH" != "aarch64" ]; then
@@ -42,23 +71,34 @@ if [ "$ARCH" != "aarch64" ]; then
   exit 41
 fi
 
-# 앱이 Termux 명령의 실제 시작을 즉시 확인하게 한다.
-progress 2 285 "Termux 명령 실행 확인 · 저장소 초기화"
-mkdir -p "$PREFIX/etc/apt/sources.list.d"
-printf '%s\n' 'deb https://packages.termux.dev/apt/termux-main stable main' > "$PREFIX/etc/apt/sources.list"
-printf '%s\n' 'deb https://packages.termux.dev/apt/termux-x11 x11 main' > "$PREFIX/etc/apt/sources.list.d/x11.list"
+progress 2 285 "Termux 로컬 bootstrap 실행 확인"
+
+# 기존 프로세스를 pkill로 광범위하게 종료하지 않는다. 이전 버전은 이 과정에서
+# 새 shell까지 함께 종료될 가능성이 있었으므로 v5에서는 패키지 관리자가 직접
+# 잠금/복구를 처리하도록 둔다.
+if command -v dpkg >/dev/null 2>&1; then
+  dpkg --configure -a || true
+fi
+
+progress 3 275 "Termux 저장소 확인"
 apt-get update -o Acquire::Languages=none -o Acquire::Retries=3
 
-progress 7 250 "X11 · PRoot · 오디오 최소 구성 설치"
-apt-get install -y termux-x11-nightly proot-distro pulseaudio
+# x11-repo가 아직 활성화되지 않은 깨끗한 Termux에서도 공식 방식으로 추가한다.
+if ! apt-cache show termux-x11-nightly >/dev/null 2>&1; then
+  progress 5 265 "공식 Termux X11 저장소 추가"
+  apt-get install -y x11-repo
+  apt-get update -o Acquire::Languages=none -o Acquire::Retries=3
+fi
 
-# 설치가 끝날 때까지 기다리지 않고 X11 서버를 바로 올린다.
-# 사용자가 Termux:X11을 열었을 때 'Not connected'가 계속 남지 않게 한다.
+progress 7 250 "X11 · PRoot · 오디오 최소 구성 설치"
+apt-get install -y termux-x11-nightly proot-distro pulseaudio curl xz-utils tar coreutils procps
+
 progress 9 235 "Termux:X11 :1 서버 시작"
-export XDG_RUNTIME_DIR="$TMPDIR"
-pkill -f 'termux-x11 :1' >/dev/null 2>&1 || true
-nohup termux-x11 :1 >/dev/null 2>&1 &
-sleep 2
+export XDG_RUNTIME_DIR="${TMPDIR:-$PREFIX/tmp}"
+if ! pgrep -f 'termux-x11 :1' >/dev/null 2>&1; then
+  termux-x11 :1 >"$STATE_DIR/x11.log" 2>&1 &
+  sleep 2
+fi
 
 progress 11 220 "사전 구성 Linux 이미지 정보 확인"
 MANIFEST="$CACHE_DIR/manifest.txt"
@@ -79,23 +119,35 @@ fi
 
 progress 13 205 "Linux 이미지 병렬 다운로드 시작 ($PART_COUNT개 조각)"
 export CACHE_DIR RUNTIME_BASE
-awk '$1=="PART"{print $2}' "$MANIFEST" | \
-  xargs -P 6 -n 1 sh -c '
-    p="$1"
-    out="$CACHE_DIR/$p"
-    url="$RUNTIME_BASE/$p"
-    if [ -f "$out" ]; then
-      curl -fL --retry 5 --retry-delay 1 --connect-timeout 10 -C - "$url" -o "$out" || {
-        rm -f "$out"
-        curl -fL --retry 5 --retry-delay 1 --connect-timeout 10 "$url" -o "$out"
-      }
-    else
+
+download_part() {
+  local p="$1"
+  local out="$CACHE_DIR/$p"
+  local url="$RUNTIME_BASE/$p"
+  if [ -f "$out" ]; then
+    curl -fL --retry 5 --retry-delay 1 --connect-timeout 10 -C - "$url" -o "$out" || {
+      rm -f "$out"
       curl -fL --retry 5 --retry-delay 1 --connect-timeout 10 "$url" -o "$out"
-    fi
-  ' _ &
-DL_PID=$!
+    }
+  else
+    curl -fL --retry 5 --retry-delay 1 --connect-timeout 10 "$url" -o "$out"
+  fi
+}
+export -f download_part
+
+# xargs 의존성을 없애고 bash 자체 background job으로 병렬 다운로드한다.
+ACTIVE=0
+while read -r part; do
+  download_part "$part" &
+  ACTIVE=$((ACTIVE + 1))
+  if [ "$ACTIVE" -ge 6 ]; then
+    wait -n
+    ACTIVE=$((ACTIVE - 1))
+  fi
+done < <(awk '$1=="PART"{print $2}' "$MANIFEST")
+
 START_TS=$(date +%s)
-while kill -0 "$DL_PID" >/dev/null 2>&1; do
+while jobs -pr | grep -q .; do
   DONE=0
   while read -r _ part _ _; do
     f="$CACHE_DIR/$part"
@@ -119,7 +171,7 @@ while kill -0 "$DL_PID" >/dev/null 2>&1; do
   progress "$PCT" "$ETA" "Linux 이미지 다운로드 ${MB}/${TOTAL_MB}MB"
   sleep 1
 done
-wait "$DL_PID"
+wait
 
 progress 79 50 "다운로드 무결성 검사"
 while read -r kind part size sha; do
@@ -140,7 +192,7 @@ while read -r _ part _ _; do cat "$CACHE_DIR/$part"; done < <(awk '$1=="PART"{pr
   | xz -dc \
   | tar -xpf - -C "$LEGACY_ROOT"
 
-progress 94 18 "Linux 네트워크 및 PRoot 등록"
+progress 94 18 "Linux 네트워크 및 PRoot 확인"
 mkdir -p "$LEGACY_ROOT/etc"
 rm -f "$LEGACY_ROOT/etc/resolv.conf"
 printf '%s\n' 'nameserver 8.8.8.8' 'nameserver 8.8.4.4' > "$LEGACY_ROOT/etc/resolv.conf"
@@ -151,7 +203,7 @@ progress 97 8 "원클릭 Chrome 실행 환경 구성"
 cat >"$STATE_DIR/launch.sh" <<'LAUNCH'
 #!/data/data/com.termux/files/usr/bin/bash
 set -e
-export XDG_RUNTIME_DIR="$TMPDIR"
+export XDG_RUNTIME_DIR="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
 if ! pgrep -f "termux-x11 :1" >/dev/null 2>&1; then
   termux-x11 :1 >/dev/null 2>&1 &
   sleep 1
@@ -177,7 +229,8 @@ chmod +x "$STATE_DIR/launch.sh"
 
 rm -rf "$CACHE_DIR"
 mkdir -p "$CACHE_DIR"
-printf '%s\n' '4' > "$STATE_DIR/engine-version"
+printf '%s\n' '5' > "$STATE_DIR/engine-version"
 touch "$STATE_DIR/ready"
 progress 100 0 "고속 설정 완료"
 /system/bin/am broadcast -n "$APP_RECEIVER" -a "$APP_PACKAGE.SETUP_DONE" >/dev/null 2>&1 || true
+log "설정이 완료되었습니다. deskTAB Chrome 앱으로 돌아가 Desktop Chrome 실행을 누르세요."
