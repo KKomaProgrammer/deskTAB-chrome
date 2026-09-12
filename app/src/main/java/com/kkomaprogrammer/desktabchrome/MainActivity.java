@@ -158,7 +158,7 @@ public class MainActivity extends Activity {
         root.addView(button("세션 종료", v -> stopDesktop()));
 
         TextView note = new TextView(this);
-        note.setText("v1.2.6은 Termux 내부 heartbeat를 직접 읽어 실제 실행 여부를 확인합니다. 방송이 누락돼도 실행 중인 설치를 실패로 오인하지 않으며, bootstrap 자체도 원자적 단일 실행 lock으로 중복 apt/dpkg 실행을 차단합니다.");
+        note.setText("v1.2.7은 heartbeat 진행률을 단조 증가로 처리해 오래된 2% 상태가 이후 진행률을 덮어쓰지 못합니다. 설치 자체와 다운로드 진행률은 그대로 유지됩니다.");
         note.setTextSize(13);
         note.setPadding(0, dp(20), 0, dp(8));
         root.addView(note);
@@ -447,6 +447,13 @@ public class MainActivity extends Activity {
                         .putString("termux_last_error", "")
                         .putLong("setup_eta_base", 0)
                         .putLong("setup_eta_at", now).apply();
+                return true;
+            }
+
+            int currentProgress = prefs.getInt("setup_progress", 0);
+            if (prefs.getBoolean("ready", false)) return true;
+            if (progress < currentProgress) {
+                // 오래된 heartbeat/방송은 살아 있다는 신호로만 사용하고 진행률은 절대 되돌리지 않는다.
                 return true;
             }
 
