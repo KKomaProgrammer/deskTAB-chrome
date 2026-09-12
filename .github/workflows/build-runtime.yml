@@ -26,24 +26,25 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq pigz
+          sudo apt-get install -y -qq xz-utils
           rm -rf /tmp/desktab-publish
           mkdir -p /tmp/desktab-publish
           docker build --pull -t desktab-runtime:arm64 runtime
           CID=$(docker create desktab-runtime:arm64)
           trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
-          docker export "$CID" | pigz -9 > /tmp/desktab-runtime-arm64.tar.gz
+          docker export "$CID" | xz -T0 -6 -c > /tmp/desktab-runtime-arm64.tar.xz
 
       - name: Split and checksum runtime
         run: |
           set -euo pipefail
-          ARCHIVE=/tmp/desktab-runtime-arm64.tar.gz
+          ARCHIVE=/tmp/desktab-runtime-arm64.tar.xz
           ARCHIVE_SIZE=$(stat -c %s "$ARCHIVE")
           ARCHIVE_SHA=$(sha256sum "$ARCHIVE" | awk '{print $1}')
           split -b 48M -d -a 3 "$ARCHIVE" /tmp/desktab-publish/runtime-arm64.part-
           {
             echo "VERSION $GITHUB_SHA"
             echo "ARCH arm64"
+            echo "FORMAT xz"
             echo "ARCHIVE_SIZE $ARCHIVE_SIZE"
             echo "ARCHIVE_SHA256 $ARCHIVE_SHA"
             for f in /tmp/desktab-publish/runtime-arm64.part-*; do
