@@ -23,7 +23,7 @@ failed() {
 }
 trap failed ERR
 
-# v1.1.x의 장시간 설치가 남아 있으면 새 고속 설치가 package-manager lock에 막히지 않도록 정리한다.
+# v1.1.x에서 남은 느린 설치 프로세스를 종료해 package-manager lock을 해제한다.
 pkill -f 'proot-distro install ubuntu' >/dev/null 2>&1 || true
 pkill -f 'apt-get install -y xfce4' >/dev/null 2>&1 || true
 pkill -f 'apt-get install -y fonts-noto' >/dev/null 2>&1 || true
@@ -59,7 +59,7 @@ if [ -z "$TOTAL_SIZE" ] || [ "$TOTAL_SIZE" -le 0 ] || [ "$PART_COUNT" -le 0 ]; t
   exit 42
 fi
 
-# 이전 중단 다운로드는 이어받는다. 각 조각은 GitHub raw CDN에서 병렬로 받는다.
+# 이전 중단 다운로드는 이어받고, GitHub raw CDN에서 여러 조각을 동시에 받는다.
 progress 12 210 "Linux 이미지 병렬 다운로드 시작 ($PART_COUNT개 조각)"
 export CACHE_DIR RUNTIME_BASE
 awk '$1=="PART"{print $2}' "$MANIFEST" | \
@@ -110,14 +110,14 @@ while read -r kind part size sha; do
   actual_size=$(stat -c %s "$CACHE_DIR/$part")
   [ "$actual_size" = "$size" ] || { echo "Size mismatch: $part" >&2; exit 43; }
   echo "$sha  $CACHE_DIR/$part" | sha256sum -c - >/dev/null
- done < "$MANIFEST"
+done < "$MANIFEST"
 CALC_SHA=$(while read -r _ part _ _; do cat "$CACHE_DIR/$part"; done < <(awk '$1=="PART"{print}' "$MANIFEST") | sha256sum | awk '{print $1}')
 [ "$CALC_SHA" = "$ARCHIVE_SHA" ] || { echo "Archive checksum mismatch" >&2; exit 44; }
 
 progress 80 55 "Ubuntu + XFCE + Chrome 이미지 고속 해제"
-LEGACY_ROOT="$PREFIX/var/lib/proot-distro/installed-rootfs/desktab-ubuntu"
-MODERN_ROOT="$PREFIX/var/lib/proot-distro/containers/desktab-ubuntu"
-rm -rf "$LEGACY_ROOT" "$MODERN_ROOT"
+LEGACY_ROOT="$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu"
+MODERN_CONTAINER="$PREFIX/var/lib/proot-distro/containers/ubuntu"
+rm -rf "$LEGACY_ROOT" "$MODERN_CONTAINER"
 mkdir -p "$LEGACY_ROOT"
 while read -r _ part _ _; do cat "$CACHE_DIR/$part"; done < <(awk '$1=="PART"{print}' "$MANIFEST") \
   | pigz -dc \
@@ -128,7 +128,7 @@ mkdir -p "$LEGACY_ROOT/etc"
 rm -f "$LEGACY_ROOT/etc/resolv.conf"
 printf '%s\n' 'nameserver 8.8.8.8' 'nameserver 8.8.4.4' > "$LEGACY_ROOT/etc/resolv.conf"
 printf '%s\n' '127.0.0.1 localhost' '::1 localhost' > "$LEGACY_ROOT/etc/hosts"
-proot-distro login desktab-ubuntu --shared-tmp -- /bin/bash -lc 'mkdir -p /tmp/runtime-root; chmod 700 /tmp/runtime-root; true'
+proot-distro login ubuntu --shared-tmp -- /bin/bash -lc 'mkdir -p /tmp/runtime-root; chmod 700 /tmp/runtime-root; true'
 
 progress 96 12 "원클릭 Chrome 실행 환경 구성"
 cat >"$STATE_DIR/launch.sh" <<'LAUNCH'
@@ -141,7 +141,7 @@ if ! pgrep -f "termux-x11 :1" >/dev/null 2>&1; then
 fi
 pulseaudio --start --exit-idle-time=-1 >/dev/null 2>&1 || true
 export PULSE_SERVER=127.0.0.1
-exec proot-distro login desktab-ubuntu --shared-tmp -- /bin/bash -lc '
+exec proot-distro login ubuntu --shared-tmp -- /bin/bash -lc '
   export DISPLAY=:1
   export XDG_RUNTIME_DIR=/tmp/runtime-root
   export PULSE_SERVER=127.0.0.1
@@ -153,7 +153,7 @@ exec proot-distro login desktab-ubuntu --shared-tmp -- /bin/bash -lc '
 LAUNCH
 chmod +x "$STATE_DIR/launch.sh"
 
-# 설치 후 압축 조각은 삭제해 저장 공간을 회수한다. 설치된 Linux/Chrome 데이터는 유지된다.
+# 설치 후 압축 조각을 지워 저장 공간을 회수한다. 설치된 Linux/Chrome 데이터는 유지된다.
 rm -rf "$CACHE_DIR"
 mkdir -p "$CACHE_DIR"
 printf '%s\n' '2' > "$STATE_DIR/engine-version"
