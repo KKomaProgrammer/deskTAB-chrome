@@ -9,22 +9,38 @@ RUNTIME_BASE="https://raw.githubusercontent.com/KKomaProgrammer/deskTAB-chrome/r
 LOCK_DIR="$STATE_DIR/bootstrap.lock"
 LEGACY_PID_FILE="$STATE_DIR/setup.pid"
 HEARTBEAT_FILE="$STATE_DIR/heartbeat"
+HEARTBEAT_STATE_FILE="$STATE_DIR/heartbeat-state"
 PKG_LOG="$STATE_DIR/package-manager.log"
 CURRENT_STAGE="고속 설치 시작"
 CURRENT_PCT=1
 CURRENT_ETA=300
 OWN_LOCK=0
 HEARTBEAT_LOOP_PID=""
+BOOTSTRAP_PID="$$"
 mkdir -p "$STATE_DIR" "$CACHE_DIR"
 
 log() {
   printf '[deskTAB] %s\n' "$*"
 }
 
+write_state() {
+  local tmp="$HEARTBEAT_STATE_FILE.tmp.${BASHPID:-$$}"
+  printf '%s|%s|%s\n' "$CURRENT_PCT" "$CURRENT_ETA" "$CURRENT_STAGE" > "$tmp"
+  mv -f "$tmp" "$HEARTBEAT_STATE_FILE"
+}
+
 write_heartbeat() {
-  local tmp="$HEARTBEAT_FILE.tmp.$$"
-  printf '%s|%s|%s|%s|%s\n' "$(date +%s)" "$$" "$CURRENT_PCT" "$CURRENT_ETA" "$CURRENT_STAGE" > "$tmp"
+  local state tmp
+  state="$(cat "$HEARTBEAT_STATE_FILE" 2>/dev/null || true)"
+  [ -n "$state" ] || return 0
+  tmp="$HEARTBEAT_FILE.tmp.${BASHPID:-$$}"
+  printf '%s|%s|%s\n' "$(date +%s)" "$BOOTSTRAP_PID" "$state" > "$tmp"
   mv -f "$tmp" "$HEARTBEAT_FILE"
+}
+
+publish_state() {
+  write_state
+  write_heartbeat
 }
 
 heartbeat_loop() {
@@ -46,7 +62,7 @@ progress() {
   CURRENT_ETA="$eta"
   CURRENT_STAGE="$*"
   log "$pct% · $CURRENT_STAGE"
-  write_heartbeat
+  publish_state
   broadcast_progress "$pct" "$eta" "$CURRENT_STAGE"
 }
 
@@ -58,7 +74,7 @@ failed() {
   CURRENT_ETA=0
   CURRENT_STAGE="실패: $CURRENT_STAGE · line $line · exit $code"
   log "오류 · line $line · exit $code · $CURRENT_STAGE"
-  write_heartbeat
+  publish_state
   /system/bin/am broadcast -n "$APP_RECEIVER" -a "$APP_PACKAGE.SETUP_FAILED" \
     --es stage "$CURRENT_STAGE" >/dev/null 2>&1
   exit "$code"
@@ -110,7 +126,6 @@ cleanup_stale_desktab_pkg_processes() {
 cleanup_legacy_desktab_processes() {
   local pid ppid args
   local found=0
-  # 이 함수는 현재 heartbeat loop를 시작하기 전에 한 번만 호출한다.
   while read -r pid ppid args; do
     [ -n "${pid:-}" ] || continue
     [ "$pid" = "$$" ] && continue
@@ -140,7 +155,6 @@ acquire_singleton_lock() {
   owner="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
   if [ -n "$owner" ] && kill -0 "$owner" >/dev/null 2>&1; then
     log "이미 deskTAB 설치가 실행 중입니다 (PID $owner). 두 번째 설치는 시작하지 않습니다."
-    broadcast_progress 2 300 "기존 deskTAB 설치가 이미 실행 중 · 중복 실행 차단"
     return 1
   fi
 
@@ -170,7 +184,7 @@ run_pkg() {
       CURRENT_ETA=$((300 - attempt * 2))
       [ "$CURRENT_ETA" -lt 30 ] && CURRENT_ETA=30
       log "$CURRENT_STAGE"
-      write_heartbeat
+      publish_state
       broadcast_progress "$CURRENT_PCT" "$CURRENT_ETA" "$CURRENT_STAGE"
       if [ "$attempt" -eq 5 ]; then
         cleanup_stale_desktab_pkg_processes
@@ -185,7 +199,7 @@ run_pkg() {
 }
 
 log "=========================================="
-log "deskTAB Chrome Linux bootstrap v6 시작"
+log "deskTAB Chrome Linux bootstrap v6.1 시작"
 log "HOME=$HOME"
 log "PREFIX=${PREFIX:-<unset>}"
 log "ARCH=$(uname -m)"
@@ -204,10 +218,10 @@ trap cleanup EXIT
 CURRENT_PCT=2
 CURRENT_ETA=290
 CURRENT_STAGE="이전 deskTAB 작업 정리 및 패키지 잠금 복구"
-write_heartbeat
+publish_state
 broadcast_progress "$CURRENT_PCT" "$CURRENT_ETA" "$CURRENT_STAGE"
 
-# heartbeat 보조 프로세스를 만들기 전에 v5 이하의 남은 프로세스를 정리한다.
+# v1.2.6 이하에서 남은 프로세스를 먼저 정리한 뒤 heartbeat 보조 루프를 시작한다.
 cleanup_legacy_desktab_processes
 heartbeat_loop &
 HEARTBEAT_LOOP_PID=$!
