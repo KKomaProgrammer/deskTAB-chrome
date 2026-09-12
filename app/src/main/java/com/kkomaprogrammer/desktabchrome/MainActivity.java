@@ -35,9 +35,15 @@ public class MainActivity extends Activity {
     private static final int REQ_UNKNOWN_SOURCES = 2002;
     private static final int REQ_NOTIFICATIONS = 2003;
     private static final String ENABLE_EXTERNAL_COMMAND =
-            "mkdir -p ~/.termux; touch ~/.termux/termux.properties; " +
-            "if grep -q '^allow-external-apps=' ~/.termux/termux.properties; then sed -i 's/^allow-external-apps=.*/allow-external-apps=true/' ~/.termux/termux.properties; " +
-            "else echo 'allow-external-apps=true' >> ~/.termux/termux.properties; fi; termux-reload-settings; echo 'deskTAB: external command access enabled'";
+            "for f in \"$HOME/.termux/termux.properties\" \"$HOME/.config/termux/termux.properties\"; do " +
+            "mkdir -p \"$(dirname \"$f\")\"; touch \"$f\"; " +
+            "if grep -q '^[[:space:]]*allow-external-apps=' \"$f\"; then " +
+            "sed -i 's/^[[:space:]]*allow-external-apps=.*/allow-external-apps=true/' \"$f\"; " +
+            "else printf '\\nallow-external-apps=true\\n' >> \"$f\"; fi; chmod 600 \"$f\"; done; " +
+            "termux-reload-settings 2>/dev/null || true; " +
+            "echo '=== deskTAB Termux 설정 확인 ==='; " +
+            "grep -H '^[[:space:]]*allow-external-apps=' \"$HOME/.termux/termux.properties\" \"$HOME/.config/termux/termux.properties\" 2>/dev/null; " +
+            "echo '두 줄 모두 allow-external-apps=true 이면 완료입니다.'";
 
     private TextView status, progressDetail;
     private ProgressBar progressBar;
@@ -55,12 +61,11 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("state", MODE_PRIVATE);
         SetupService.createChannel(this);
 
-        // v1.1.x의 느린 설치 상태가 남아 있으면 새 고속 설치로 바로 전환할 수 있게 한다.
         if (prefs.getBoolean("setup_running", false)
                 && prefs.getInt("setup_engine_version", 0) < SetupService.ENGINE_VERSION) {
             prefs.edit().putBoolean("setup_running", false)
                     .putInt("setup_progress", 0)
-                    .putString("setup_stage", "구형 설치 감지 · 고속 설치로 전환 가능")
+                    .putString("setup_stage", "구형 설치 감지 · 새 Termux 브리지로 재시작 가능")
                     .putLong("setup_eta_base", 0)
                     .apply();
         }
@@ -133,7 +138,7 @@ public class MainActivity extends Activity {
         root.addView(button("세션 종료", v -> stopDesktop()));
 
         TextView note = new TextView(this);
-        note.setText("v1.2부터 Ubuntu/XFCE/글꼴/Chrome을 기기에서 하나씩 설치하지 않고 미리 구성된 이미지를 병렬 다운로드해 바로 해제합니다. ARM64에서 목표 설치 시간은 약 2~5분이며 실제 시간은 인터넷 속도와 저장장치 성능에 따라 달라질 수 있습니다. 앱을 닫거나 화면을 꺼도 계속됩니다.");
+        note.setText("v1.2.3부터 Termux RUN_COMMAND를 app-shell 모드로 실행하고 Termux의 실제 실행 결과를 앱이 직접 받습니다. 외부 명령 설정은 두 지원 경로(.termux 및 .config/termux)에 동시에 적용합니다. Ubuntu/XFCE/글꼴/Chrome은 사전 구성 이미지를 병렬 다운로드해 설치합니다.");
         note.setTextSize(13);
         note.setPadding(0, dp(20), 0, dp(8));
         root.addView(note);
@@ -182,14 +187,16 @@ public class MainActivity extends Activity {
         boolean depRunning = prefs.getBoolean("dep_download_running", false);
         int depProgress = prefs.getInt("dep_progress", 0);
         String depStage = prefs.getString("dep_stage", "대기");
+        String lastError = prefs.getString("termux_last_error", "");
 
         status.setText(
                 "Termux: " + (termux ? "설치됨" : "미설치") +
                 "\nTermux:X11: " + (x11 ? "설치됨" : "미설치") +
                 "\nRUN_COMMAND 권한: " + (permission ? "허용됨" : "허용 필요") +
                 "\nLinux 환경: " + (ready ? "설정 완료" : (running ? "고속 백그라운드 설정 중" : "설정 필요")) +
-                "\n설치 엔진: " + (prefs.getInt("setup_engine_version", 0) >= 2 ? "고속 이미지 v2" : "대기") +
-                "\n기기 ABI: " + Build.SUPPORTED_ABIS[0]);
+                "\n설치 엔진: " + (prefs.getInt("setup_engine_version", 0) >= 4 ? "고속 이미지 + 결과 브리지 v4" : "대기") +
+                "\n기기 ABI: " + Build.SUPPORTED_ABIS[0] +
+                (!lastError.isEmpty() ? "\n최근 Termux 오류: " + lastError : ""));
 
         if (running || ready) {
             progressBar.setProgress(sp);
@@ -200,7 +207,7 @@ public class MainActivity extends Activity {
             progressDetail.setText("필수 앱 다운로드: " + depProgress + "% · " + depStage);
         } else {
             progressBar.setProgress(0);
-            progressDetail.setText("고속 설정을 시작하면 실제 다운로드 용량 기준 진행률과 예상 시간이 표시됩니다.");
+            progressDetail.setText(stage);
         }
     }
 
@@ -270,9 +277,9 @@ public class MainActivity extends Activity {
         cm.setPrimaryClip(ClipData.newPlainText("deskTAB Termux setup", ENABLE_EXTERNAL_COMMAND));
         new AlertDialog.Builder(this)
                 .setTitle("Termux 보안 설정 1회 필요")
-                .setMessage("명령을 클립보드에 복사했습니다. Termux가 열리면 붙여넣고 Enter를 한 번 누르세요.")
+                .setMessage("명령을 클립보드에 복사했습니다. 이번 명령은 Termux가 지원하는 두 설정 경로에 모두 allow-external-apps=true를 적용하고 마지막에 실제 값을 출력합니다. Termux에서 붙여넣고 Enter를 누른 뒤 두 줄 모두 true인지 확인하세요.")
                 .setPositiveButton("Termux 열기", (d,w) -> openPackage(TERMUX))
-                .setNeutralButton("앱 권한 설정", (d,w) -> openOwnAppSettings())
+                .setNeutralButton("deskTAB 권한 설정", (d,w) -> openOwnAppSettings())
                 .setNegativeButton("닫기", null)
                 .show();
     }
@@ -299,9 +306,10 @@ public class MainActivity extends Activity {
             return;
         }
 
+        prefs.edit().putString("termux_last_error", "").apply();
         Intent i = new Intent(this, SetupService.class).setAction(SetupService.ACTION_BOOTSTRAP);
         ContextCompat.startForegroundService(this, i);
-        Toast.makeText(this, "고속 Linux 설정을 시작했습니다. 목표 약 2~5분이며 앱을 닫아도 계속됩니다.", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "Termux 결과 확인 기능을 포함한 고속 Linux 설정을 시작했습니다.", Toast.LENGTH_LONG).show();
         refreshStatus();
     }
 
@@ -340,6 +348,7 @@ public class MainActivity extends Activity {
         i.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args);
         i.putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home");
         i.putExtra("com.termux.RUN_COMMAND_BACKGROUND", background);
+        i.putExtra("com.termux.RUN_COMMAND_RUNNER", background ? "app-shell" : "terminal-session");
         startService(i);
     }
 
