@@ -33,7 +33,8 @@ public class SetupService extends Service {
     public static final String ACTION_DOWNLOAD_DEPS = "com.kkomaprogrammer.desktabchrome.action.DOWNLOAD_DEPS";
     public static final String CHANNEL_ID = "desktab_setup";
     public static final int NOTIFICATION_ID = 4101;
-    public static final int ENGINE_VERSION = 2;
+    public static final int ENGINE_VERSION = 3;
+    private static final long STARTUP_TIMEOUT_MS = 15000L;
 
     private static final String TERMUX = "com.termux";
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -50,6 +51,17 @@ public class SetupService extends Service {
                         remainingEta(p));
                 handler.postDelayed(this, 5000);
             }
+        }
+    };
+
+    private final Runnable startupWatchdog = new Runnable() {
+        @Override public void run() {
+            SharedPreferences p = getSharedPreferences("state", MODE_PRIVATE);
+            if (!p.getBoolean("setup_running", false)) return;
+            if (p.getInt("setup_engine_version", 0) != ENGINE_VERSION) return;
+            if (p.getInt("setup_progress", 1) > 1) return;
+            failSetup("Termux 명령이 15초 안에 시작되지 않았습니다. 2. Termux 연결 허용을 다시 실행하고, " +
+                    "Termux에서 allow-external-apps=true 명령을 Enter로 적용한 뒤 다시 시도하세요.");
         }
     };
 
@@ -79,17 +91,19 @@ public class SetupService extends Service {
                         .putBoolean("ready", false)
                         .putInt("setup_engine_version", ENGINE_VERSION)
                         .putInt("setup_progress", 1)
-                        .putString("setup_stage", "고속 설치 엔진 시작")
+                        .putString("setup_stage", "Termux 실행 확인 중 · 최대 15초")
                         .putLong("setup_eta_base", 300)
                         .putLong("setup_eta_at", now)
                         .putLong("setup_start", now)
                         .apply();
                 startForeground(NOTIFICATION_ID, buildNotification(this,
-                        "Linux 고속 설정", "고속 설치 엔진 시작 · 1% · 목표 약 5분", 1, false, true));
+                        "Linux 고속 설정", "Termux 실행 확인 중 · 1% · 최대 15초", 1, false, true));
                 acquireWakeLock();
                 handler.removeCallbacks(ticker);
+                handler.removeCallbacks(startupWatchdog);
                 handler.post(ticker);
                 executor.execute(this::startBootstrap);
+                handler.postDelayed(startupWatchdog, STARTUP_TIMEOUT_MS);
             } else {
                 startForeground(NOTIFICATION_ID, buildNotification(this,
                         "Linux 고속 설정",
@@ -97,6 +111,10 @@ public class SetupService extends Service {
                         p.getInt("setup_progress", 1), false, true));
                 acquireWakeLock();
                 handler.post(ticker);
+                if (p.getInt("setup_progress", 1) <= 1) {
+                    handler.removeCallbacks(startupWatchdog);
+                    handler.postDelayed(startupWatchdog, STARTUP_TIMEOUT_MS);
+                }
             }
             return START_STICKY;
         }
@@ -108,6 +126,11 @@ public class SetupService extends Service {
                     p.getInt("setup_progress", 1), false, true));
             acquireWakeLock();
             handler.post(ticker);
+            if (p.getInt("setup_engine_version", 0) == ENGINE_VERSION
+                    && p.getInt("setup_progress", 1) <= 1) {
+                handler.removeCallbacks(startupWatchdog);
+                handler.postDelayed(startupWatchdog, STARTUP_TIMEOUT_MS);
+            }
             return START_STICKY;
         }
 
@@ -271,6 +294,7 @@ public class SetupService extends Service {
     }
 
     private void failSetup(String message) {
+        if (handler != null) handler.removeCallbacks(startupWatchdog);
         SharedPreferences p = getSharedPreferences("state", MODE_PRIVATE);
         p.edit().putBoolean("setup_running", false).putString("setup_stage", message)
                 .putLong("setup_eta_base", 0).apply();
@@ -336,6 +360,7 @@ public class SetupService extends Service {
 
     @Override public void onDestroy() {
         handler.removeCallbacks(ticker);
+        handler.removeCallbacks(startupWatchdog);
         releaseWakeLock();
         executor.shutdownNow();
         super.onDestroy();
