@@ -55,7 +55,7 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("state", MODE_PRIVATE);
         SetupService.createChannel(this);
 
-        // v1.1.x의 20~35분 설치 상태가 남아 있으면 새 고속 엔진으로 전환할 수 있게 해제한다.
+        // v1.1.x의 느린 설치 상태가 남아 있으면 새 고속 설치로 바로 전환할 수 있게 한다.
         if (prefs.getBoolean("setup_running", false)
                 && prefs.getInt("setup_engine_version", 0) < SetupService.ENGINE_VERSION) {
             prefs.edit().putBoolean("setup_running", false)
@@ -325,7 +325,7 @@ public class MainActivity extends Activity {
     private void stopDesktop() {
         try {
             sendTermux("/data/data/com.termux/files/usr/bin/bash",
-                    new String[]{"-lc", "proot-distro login desktab-ubuntu --shared-tmp -- /bin/bash -lc 'pkill -f google-chrome-stable || true; pkill -f xfce4-session || true' >/dev/null 2>&1 || true; pkill -f 'termux-x11 :1' || true"}, true);
+                    new String[]{"-lc", "proot-distro login ubuntu --shared-tmp -- /bin/bash -lc 'pkill -f google-chrome-stable || true; pkill -f xfce4-session || true' >/dev/null 2>&1 || true; pkill -f 'termux-x11 :1' || true"}, true);
             Toast.makeText(this, "데스크톱 세션 종료 명령을 보냈습니다.", Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
             showError("세션 종료 실패", e);
