@@ -33,19 +33,22 @@ public class SetupService extends Service {
     public static final String ACTION_DOWNLOAD_DEPS = "com.kkomaprogrammer.desktabchrome.action.DOWNLOAD_DEPS";
     public static final String CHANNEL_ID = "desktab_setup";
     public static final int NOTIFICATION_ID = 4101;
+    public static final int ENGINE_VERSION = 2;
+
     private static final String TERMUX = "com.termux";
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private PowerManager.WakeLock wakeLock;
     private android.os.Handler handler;
+
     private final Runnable ticker = new Runnable() {
         @Override public void run() {
             SharedPreferences p = getSharedPreferences("state", MODE_PRIVATE);
             if (p.getBoolean("setup_running", false)) {
                 updateSetupNotification(SetupService.this,
                         p.getInt("setup_progress", 1),
-                        p.getString("setup_stage", "Linux 환경 설정 중"),
+                        p.getString("setup_stage", "고속 Linux 환경 설정 중"),
                         remainingEta(p));
-                handler.postDelayed(this, 30000);
+                handler.postDelayed(this, 5000);
             }
         }
     };
@@ -59,40 +62,64 @@ public class SetupService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
         if (ACTION_DOWNLOAD_DEPS.equals(action)) {
-            startForeground(NOTIFICATION_ID, buildNotification(this, "필수 앱 다운로드", "다운로드 준비 중", 0, 0, true, true));
+            startForeground(NOTIFICATION_ID, buildNotification(this, "필수 앱 다운로드", "다운로드 준비 중", 0, true, true));
             acquireWakeLock();
             executor.execute(this::downloadDependencies);
-        } else if (ACTION_BOOTSTRAP.equals(action)) {
-            SharedPreferences p = getSharedPreferences("state", MODE_PRIVATE);
-            if (!p.getBoolean("setup_running", false)) {
-                long now = System.currentTimeMillis();
-                p.edit().putBoolean("setup_running", true).putBoolean("ready", false)
-                        .putInt("setup_progress", 1).putString("setup_stage", "설정 시작 준비")
-                        .putLong("setup_eta_base", 1800).putLong("setup_eta_at", now)
-                        .putLong("setup_start", now).apply();
-            }
-            startForeground(NOTIFICATION_ID, buildNotification(this, "Linux 환경 설정", "설정 시작 준비 · 1% · 약 30분 남음", 1, 1800, false, true));
-            acquireWakeLock();
-            handler.removeCallbacks(ticker);
-            handler.post(ticker);
-            executor.execute(this::startBootstrap);
-        } else if (getSharedPreferences("state", MODE_PRIVATE).getBoolean("setup_running", false)) {
-            SharedPreferences p = getSharedPreferences("state", MODE_PRIVATE);
-            startForeground(NOTIFICATION_ID, buildNotification(this, "Linux 환경 설정",
-                    p.getString("setup_stage", "설정 계속 진행 중"), p.getInt("setup_progress", 1), remainingEta(p), false, true));
-            acquireWakeLock();
-            handler.post(ticker);
-        } else {
-            stopSelf();
+            return START_STICKY;
         }
-        return START_STICKY;
+
+        SharedPreferences p = getSharedPreferences("state", MODE_PRIVATE);
+        if (ACTION_BOOTSTRAP.equals(action)) {
+            boolean alreadyFast = p.getBoolean("setup_running", false)
+                    && p.getInt("setup_engine_version", 0) == ENGINE_VERSION;
+            if (!alreadyFast) {
+                long now = System.currentTimeMillis();
+                p.edit()
+                        .putBoolean("setup_running", true)
+                        .putBoolean("ready", false)
+                        .putInt("setup_engine_version", ENGINE_VERSION)
+                        .putInt("setup_progress", 1)
+                        .putString("setup_stage", "고속 설치 엔진 시작")
+                        .putLong("setup_eta_base", 300)
+                        .putLong("setup_eta_at", now)
+                        .putLong("setup_start", now)
+                        .apply();
+                startForeground(NOTIFICATION_ID, buildNotification(this,
+                        "Linux 고속 설정", "고속 설치 엔진 시작 · 1% · 목표 약 5분", 1, false, true));
+                acquireWakeLock();
+                handler.removeCallbacks(ticker);
+                handler.post(ticker);
+                executor.execute(this::startBootstrap);
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification(this,
+                        "Linux 고속 설정",
+                        p.getString("setup_stage", "고속 설치 계속 진행 중"),
+                        p.getInt("setup_progress", 1), false, true));
+                acquireWakeLock();
+                handler.post(ticker);
+            }
+            return START_STICKY;
+        }
+
+        if (p.getBoolean("setup_running", false)) {
+            startForeground(NOTIFICATION_ID, buildNotification(this,
+                    "Linux 고속 설정",
+                    p.getString("setup_stage", "고속 설치 계속 진행 중"),
+                    p.getInt("setup_progress", 1), false, true));
+            acquireWakeLock();
+            handler.post(ticker);
+            return START_STICKY;
+        }
+
+        stopSelf();
+        return START_NOT_STICKY;
     }
 
     private void acquireWakeLock() {
         if (wakeLock != null && wakeLock.isHeld()) return;
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "deskTAB:setup");
-        wakeLock.acquire(6L * 60L * 60L * 1000L);
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "deskTAB:fast-setup");
+        wakeLock.acquire(60L * 60L * 1000L);
     }
 
     private void releaseWakeLock() {
@@ -112,7 +139,7 @@ public class SetupService extends Service {
             i.putExtra("com.termux.RUN_COMMAND_STDIN", script);
             startService(i);
         } catch (Exception e) {
-            failSetup("설정 시작 실패: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            failSetup("고속 설정 시작 실패: " + e.getClass().getSimpleName() + ": " + e.getMessage());
         }
     }
 
@@ -134,8 +161,15 @@ public class SetupService extends Service {
                     JSONObject a = assets.getJSONObject(n);
                     String name = a.getString("name");
                     if (!name.endsWith(".apk") || !name.contains("termux-app_")) continue;
-                    if (name.contains("_universal.apk")) { fallback = a.getString("browser_download_url"); fallbackSize = a.optLong("size", -1); }
-                    if (name.contains("_" + token + ".apk")) { chosen = a.getString("browser_download_url"); expected = a.optLong("size", -1); break; }
+                    if (name.contains("_universal.apk")) {
+                        fallback = a.getString("browser_download_url");
+                        fallbackSize = a.optLong("size", -1);
+                    }
+                    if (name.contains("_" + token + ".apk")) {
+                        chosen = a.getString("browser_download_url");
+                        expected = a.optLong("size", -1);
+                        break;
+                    }
                 }
                 if (chosen == null) { chosen = fallback; expected = fallbackSize; }
                 if (chosen == null) throw new IllegalStateException("Compatible Termux APK not found");
@@ -150,13 +184,16 @@ public class SetupService extends Service {
             p.edit().putBoolean("dep_download_running", false).putBoolean("dep_download_ready", true)
                     .putInt("dep_progress", 100).putString("dep_stage", "다운로드 완료 · 설치 승인 필요").apply();
             NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-            nm.notify(NOTIFICATION_ID, buildNotification(this, "필수 앱 다운로드 완료", "앱을 열어 Android 설치 화면을 승인하세요.", 100, 0, false, false));
+            nm.notify(NOTIFICATION_ID, buildNotification(this, "필수 앱 다운로드 완료",
+                    "앱을 열어 Android 설치 화면을 승인하세요.", 100, false, false));
             stopForeground(STOP_FOREGROUND_DETACH);
             stopSelf();
         } catch (Exception e) {
-            p.edit().putBoolean("dep_download_running", false).putString("dep_stage", "다운로드 실패: " + e.getMessage()).apply();
+            p.edit().putBoolean("dep_download_running", false)
+                    .putString("dep_stage", "다운로드 실패: " + e.getMessage()).apply();
             NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-            nm.notify(NOTIFICATION_ID, buildNotification(this, "필수 앱 다운로드 실패", String.valueOf(e.getMessage()), 0, 0, true, false));
+            nm.notify(NOTIFICATION_ID, buildNotification(this, "필수 앱 다운로드 실패",
+                    String.valueOf(e.getMessage()), 0, true, false));
             stopForeground(STOP_FOREGROUND_DETACH);
             stopSelf();
         } finally {
@@ -170,23 +207,31 @@ public class SetupService extends Service {
     }
 
     private void updateDep(int progress, String stage) {
-        getSharedPreferences("state", MODE_PRIVATE).edit().putInt("dep_progress", progress).putString("dep_stage", stage).apply();
+        getSharedPreferences("state", MODE_PRIVATE).edit()
+                .putInt("dep_progress", progress).putString("dep_stage", stage).apply();
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        nm.notify(NOTIFICATION_ID, buildNotification(this, "필수 앱 다운로드", stage + " · " + progress + "%", progress, 0, false, true));
+        nm.notify(NOTIFICATION_ID, buildNotification(this, "필수 앱 다운로드",
+                stage + " · " + progress + "%", progress, false, true));
     }
 
     private void downloadFile(String address, File out, long expected, int base, int span, String stage) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(address).openConnection();
         c.setInstanceFollowRedirects(true);
         c.setRequestProperty("User-Agent", "deskTAB-Chrome");
-        c.setConnectTimeout(30000); c.setReadTimeout(60000);
+        c.setConnectTimeout(30000);
+        c.setReadTimeout(60000);
         long total = expected > 0 ? expected : c.getContentLengthLong();
-        long done = 0; int last = -1;
-        try (InputStream in = new BufferedInputStream(c.getInputStream()); FileOutputStream fos = new FileOutputStream(out)) {
-            byte[] buf = new byte[65536]; int n;
+        long done = 0;
+        int last = -1;
+        try (InputStream in = new BufferedInputStream(c.getInputStream());
+             FileOutputStream fos = new FileOutputStream(out)) {
+            byte[] buf = new byte[65536];
+            int n;
             while ((n = in.read(buf)) >= 0) {
-                fos.write(buf, 0, n); done += n;
-                int inner = total > 0 ? (int)Math.min(100, done * 100 / total) : Math.min(95, (int)(done / (1024L * 1024L)) * 3);
+                fos.write(buf, 0, n);
+                done += n;
+                int inner = total > 0 ? (int)Math.min(100, done * 100 / total)
+                        : Math.min(95, (int)(done / (1024L * 1024L)) * 3);
                 int progress = Math.min(99, base + inner * span / 100);
                 if (progress != last) { last = progress; updateDep(progress, stage); }
             }
@@ -205,15 +250,21 @@ public class SetupService extends Service {
         HttpURLConnection c = (HttpURLConnection) new URL(address).openConnection();
         c.setRequestProperty("Accept", "application/vnd.github+json");
         c.setRequestProperty("User-Agent", "deskTAB-Chrome");
-        c.setConnectTimeout(20000); c.setReadTimeout(20000);
+        c.setConnectTimeout(20000);
+        c.setReadTimeout(20000);
         try (BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8))) {
-            StringBuilder b = new StringBuilder(); String line; while ((line = r.readLine()) != null) b.append(line); return b.toString();
+            StringBuilder b = new StringBuilder();
+            String line;
+            while ((line = r.readLine()) != null) b.append(line);
+            return b.toString();
         } finally { c.disconnect(); }
     }
 
     private String readAsset(String name) throws Exception {
         try (InputStream in = getAssets().open(name)) {
-            byte[] buf = new byte[8192]; StringBuilder b = new StringBuilder(); int n;
+            byte[] buf = new byte[8192];
+            StringBuilder b = new StringBuilder();
+            int n;
             while ((n = in.read(buf)) > 0) b.append(new String(buf, 0, n, StandardCharsets.UTF_8));
             return b.toString();
         }
@@ -221,7 +272,8 @@ public class SetupService extends Service {
 
     private void failSetup(String message) {
         SharedPreferences p = getSharedPreferences("state", MODE_PRIVATE);
-        p.edit().putBoolean("setup_running", false).putString("setup_stage", message).apply();
+        p.edit().putBoolean("setup_running", false).putString("setup_stage", message)
+                .putLong("setup_eta_base", 0).apply();
         updateSetupNotification(this, p.getInt("setup_progress", 0), message, 0);
         stopForeground(STOP_FOREGROUND_DETACH);
         stopSelf();
@@ -230,23 +282,31 @@ public class SetupService extends Service {
 
     public static void createChannel(Context context) {
         NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
-        NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "deskTAB 설정 및 다운로드", NotificationManager.IMPORTANCE_LOW);
-        ch.setDescription("Linux 환경 설정과 필수 앱 다운로드 진행 상황");
+        NotificationChannel ch = new NotificationChannel(CHANNEL_ID,
+                "deskTAB 설정 및 다운로드", NotificationManager.IMPORTANCE_LOW);
+        ch.setDescription("Linux 고속 설정과 필수 앱 다운로드 진행 상황");
         nm.createNotificationChannel(ch);
     }
 
     private static PendingIntent contentIntent(Context c) {
-        Intent i = new Intent(c, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        return PendingIntent.getActivity(c, 0, i, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Intent i = new Intent(c, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        return PendingIntent.getActivity(c, 0, i,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
 
-    private static Notification buildNotification(Context c, String title, String text, int progress, long eta, boolean indeterminate, boolean ongoing) {
+    private static Notification buildNotification(Context c, String title, String text,
+                                                   int progress, boolean indeterminate, boolean ongoing) {
         Notification.Builder b = new Notification.Builder(c, CHANNEL_ID)
-                .setSmallIcon(com.kkomaprogrammer.desktabchrome.R.drawable.ic_launcher)
-                .setContentTitle(title).setContentText(text).setContentIntent(contentIntent(c))
-                .setOnlyAlertOnce(true).setOngoing(ongoing).setAutoCancel(!ongoing);
+                .setSmallIcon(R.drawable.ic_launcher)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setContentIntent(contentIntent(c))
+                .setOnlyAlertOnce(true)
+                .setOngoing(ongoing)
+                .setAutoCancel(!ongoing)
+                .setStyle(new Notification.BigTextStyle().bigText(text));
         if (ongoing) b.setProgress(100, Math.max(0, Math.min(100, progress)), indeterminate);
-        b.setStyle(new Notification.BigTextStyle().bigText(text));
         return b.build();
     }
 
@@ -259,16 +319,19 @@ public class SetupService extends Service {
 
     public static String formatEta(long sec) {
         if (sec <= 0) return "잠시 후";
+        if (sec < 60) return "약 " + Math.max(1, sec) + "초";
         long m = (sec + 59) / 60;
-        if (m < 60) return "약 " + m + "분";
-        return "약 " + (m / 60) + "시간 " + (m % 60) + "분";
+        return "약 " + m + "분";
     }
 
     public static void updateSetupNotification(Context c, int progress, String stage, long eta) {
         createChannel(c);
-        String text = stage + " · " + progress + "%" + (eta > 0 ? " · " + formatEta(eta) + " 남음" : "");
+        String text = stage + " · " + progress + "%"
+                + (eta > 0 ? " · " + formatEta(eta) + " 남음" : "");
         NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
-        nm.notify(NOTIFICATION_ID, buildNotification(c, progress >= 100 ? "Linux 환경 설정 완료" : "Linux 환경 설정", text, progress, eta, false, progress < 100));
+        nm.notify(NOTIFICATION_ID, buildNotification(c,
+                progress >= 100 ? "Linux 고속 설정 완료" : "Linux 고속 설정",
+                text, progress, false, progress < 100));
     }
 
     @Override public void onDestroy() {
