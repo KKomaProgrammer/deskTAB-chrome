@@ -41,7 +41,7 @@ public class MainActivity extends Activity {
     private static final int REQ_RUN_PERMISSION = 2001;
     private static final int REQ_UNKNOWN_SOURCES = 2002;
     private static final int REQ_NOTIFICATIONS = 2003;
-    private static final int ENGINE_VERSION = 6;
+    private static final int ENGINE_VERSION = 7;
 
     private static final String TERMUX_BOOTSTRAP_PATH =
             "/data/data/com.termux/files/home/desktab-bootstrap.sh";
@@ -83,7 +83,7 @@ public class MainActivity extends Activity {
                 && prefs.getInt("setup_engine_version", 0) < ENGINE_VERSION) {
             prefs.edit().putBoolean("setup_running", false)
                     .putInt("setup_progress", 0)
-                    .putString("setup_stage", "이전 실행 방식 초기화 · 단일 설치 + heartbeat v6 준비")
+                    .putString("setup_stage", "이전 실행 방식 초기화 · 검증 다운로드 + heartbeat v7 준비")
                     .putString("termux_last_error", "")
                     .putLong("setup_eta_base", 0).apply();
         }
@@ -380,7 +380,7 @@ public class MainActivity extends Activity {
             prefs.edit().putString("setup_stage",
                     "자동 실행 heartbeat 없음 · 로컬 스크립트 직접 실행 명령 복사됨")
                     .putString("termux_last_error",
-                            "Termux에서 bash ~/desktab-bootstrap.sh 를 한 번만 실행하세요. v6은 중복 실행을 자동 차단합니다.")
+                            "Termux에서 bash ~/desktab-bootstrap.sh 를 한 번만 실행하세요. v7은 중복 실행을 자동 차단합니다.")
                     .apply();
             openPackage(TERMUX);
         }, 12000);
