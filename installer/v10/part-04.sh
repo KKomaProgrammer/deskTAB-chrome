@@ -1,3 +1,10 @@
+CHECKPOINT_INTERVAL=4096
+RECORD_BYTES=10240
+EXTRACT_START="$(date +%s)"
+LAST_CHANGE="$EXTRACT_START"
+LAST_CP=0
+progress 82 75 "zstd 초고속 해제 시작 · 무정지 감시 활성"
+(
   set -o pipefail
   zstd -d -q -c "$ARCHIVE_FILE" \
     | tar --blocking-factor=20 --checkpoint="$CHECKPOINT_INTERVAL" --checkpoint-action="exec=$CHECKPOINT_HELPER" -xpf - -C "$NEW_ROOT"
