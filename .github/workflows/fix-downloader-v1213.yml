@@ -16,7 +16,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply hardened downloader patch
+      - name: Apply final downloader audit patch
         run: python3 tools/patch_v1213.py
 
       - name: Validate patched sources
@@ -25,16 +25,17 @@ jobs:
           bash -n app/src/main/assets/bootstrap.sh
           grep -q "versionName '1.2.13'" app/build.gradle
           grep -q 'ENGINE_VERSION = 7' app/src/main/java/com/kkomaprogrammer/desktabchrome/MainActivity.java
+          grep -q 'ENGINE_VERSION = 7' app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java
           grep -q 'download_part() (' app/src/main/assets/bootstrap.sh
           grep -q 'validate_xz_archive' app/src/main/assets/bootstrap.sh
-          grep -q '기존 환경 복원 완료' app/src/main/assets/bootstrap.sh
+          grep -q 'Linux 환경 교체 실패 · 기존 환경 복원 완료' app/src/main/assets/bootstrap.sh
           ! grep -q 'repair_part_atomically' app/src/main/assets/bootstrap.sh
 
-      - name: Commit hardened downloader
+      - name: Commit final audited downloader
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/src/main/assets/bootstrap.sh app/build.gradle app/src/main/java/com/kkomaprogrammer/desktabchrome/MainActivity.java
-          git commit -m 'Harden pinned runtime download and atomic install'
+          git add app/src/main/assets/bootstrap.sh app/build.gradle app/src/main/java/com/kkomaprogrammer/desktabchrome/MainActivity.java app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java
+          git commit -m 'Audit v1.2.13 downloader and engine state'
           git push origin HEAD:main
