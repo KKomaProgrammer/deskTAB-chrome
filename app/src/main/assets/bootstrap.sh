@@ -222,7 +222,7 @@ install_component() {
 }
 
 log "=========================================="
-log "deskTAB Chrome Linux bootstrap v6.2 시작"
+log "deskTAB Chrome Linux bootstrap v6.3 시작"
 log "HOME=$HOME"
 log "PREFIX=${PREFIX:-<unset>}"
 log "ARCH=$(uname -m)"
@@ -258,7 +258,6 @@ if command -v dpkg >/dev/null 2>&1 && [ -n "$(dpkg --audit 2>/dev/null || true)"
   run_pkg "중단된 dpkg 구성 복구" dpkg --configure -a
 fi
 
-# 패키지 목록이 최근 6시간 안에 갱신됐다면 매번 apt update를 반복하지 않는다.
 if find "$PREFIX/var/lib/apt/lists" -type f -mmin -360 2>/dev/null | grep -q .; then
   progress 4 260 "Termux 패키지 목록 최신 · update 생략"
 else
@@ -272,8 +271,6 @@ if ! apt-cache show termux-x11-nightly >/dev/null 2>&1; then
   run_pkg "X11 저장소 갱신" apt-get update -o Acquire::Languages=none -o Acquire::Retries=2 -o Dpkg::Use-Pty=0
 fi
 
-# 이전 버전은 이 전체 묶음을 7% 한 단계로 처리했다. 이제 실제 구성요소별로
-# 건너뛰기/설치 상태를 표시해 어느 단계가 느린지 즉시 알 수 있게 한다.
 install_component 7 235 "Termux:X11 런타임 설치" termux-x11-nightly
 install_component 8 220 "PRoot 환경 설치" proot-distro
 install_component 9 205 "PulseAudio 설치" pulseaudio
@@ -303,8 +300,18 @@ progress 14 160 "Linux 이미지 병렬 다운로드 시작 ($PART_COUNT개 조�
 export CACHE_DIR RUNTIME_BASE
 
 download_part() {
-  local p="$1" out="$CACHE_DIR/$1" url="$RUNTIME_BASE/$1"
+  local p="$1" expected_size="$2" out="$CACHE_DIR/$1" url="$RUNTIME_BASE/$1" actual=0
   if [ -f "$out" ]; then
+    actual="$(stat -c %s "$out" 2>/dev/null || echo 0)"
+    if [ "$actual" = "$expected_size" ]; then
+      return 0
+    fi
+    if [ "$actual" -gt "$expected_size" ]; then
+      rm -f "$out"
+      actual=0
+    fi
+  fi
+  if [ -f "$out" ] && [ "$actual" -gt 0 ]; then
     curl -fL --retry 5 --retry-delay 1 --connect-timeout 10 -C - "$url" -o "$out" || {
       rm -f "$out"
       curl -fL --retry 5 --retry-delay 1 --connect-timeout 10 "$url" -o "$out"
@@ -313,39 +320,76 @@ download_part() {
     curl -fL --retry 5 --retry-delay 1 --connect-timeout 10 "$url" -o "$out"
   fi
 }
-export -f download_part
 
-ACTIVE=0
-while read -r part; do
-  download_part "$part" &
-  ACTIVE=$((ACTIVE + 1))
-  if [ "$ACTIVE" -ge 6 ]; then
-    wait -n
-    ACTIVE=$((ACTIVE - 1))
-  fi
-done < <(awk '$1=="PART"{print $2}' "$MANIFEST")
-
+DOWNLOAD_PIDS=()
+DOWNLOAD_PARTS=()
 START_TS=$(date +%s)
-while jobs -pr | grep -q .; do
-  DONE=0
-  while read -r _ part _ _; do
-    f="$CACHE_DIR/$part"
-    [ -f "$f" ] && DONE=$((DONE + $(stat -c %s "$f" 2>/dev/null || echo 0)))
-  done < <(awk '$1=="PART"{print}' "$MANIFEST")
-  NOW=$(date +%s)
-  ELAPSED=$((NOW - START_TS)); [ "$ELAPSED" -lt 1 ] && ELAPSED=1
-  PCT=$((14 + DONE * 64 / TOTAL_SIZE)); [ "$PCT" -gt 78 ] && PCT=78
-  if [ "$DONE" -gt 1048576 ]; then
-    ETA=$(((TOTAL_SIZE - DONE) * ELAPSED / DONE + 45))
-  else
-    ETA=160
-  fi
-  progress "$PCT" "$ETA" "Linux 이미지 다운로드 $((DONE / 1048576))/$((TOTAL_SIZE / 1048576))MB"
-  sleep 1
-done
-wait
 
-progress 79 45 "다운로드 무결성 검사"
+update_download_progress() {
+  local done=0 f size now elapsed pct eta
+  while read -r kind part expected sha; do
+    [ "$kind" = "PART" ] || continue
+    f="$CACHE_DIR/$part"
+    if [ -f "$f" ]; then
+      size="$(stat -c %s "$f" 2>/dev/null || echo 0)"
+      [ "$size" -gt "$expected" ] && size="$expected"
+      done=$((done + size))
+    fi
+  done < "$MANIFEST"
+  now=$(date +%s)
+  elapsed=$((now - START_TS)); [ "$elapsed" -lt 1 ] && elapsed=1
+  pct=$((14 + done * 64 / TOTAL_SIZE)); [ "$pct" -gt 78 ] && pct=78
+  if [ "$done" -ge "$TOTAL_SIZE" ]; then
+    eta=0
+  elif [ "$done" -gt 1048576 ]; then
+    eta=$(((TOTAL_SIZE - done) * elapsed / done + 45))
+  else
+    eta=160
+  fi
+  progress "$pct" "$eta" "Linux 이미지 다운로드 $((done / 1048576))/$((TOTAL_SIZE / 1048576))MB"
+}
+
+wait_download_batch() {
+  local alive pid failed=0
+  while true; do
+    alive=0
+    for pid in "${DOWNLOAD_PIDS[@]}"; do
+      if kill -0 "$pid" >/dev/null 2>&1; then
+        alive=1
+        break
+      fi
+    done
+    update_download_progress
+    [ "$alive" -eq 0 ] && break
+    sleep 1
+  done
+  for pid in "${DOWNLOAD_PIDS[@]}"; do
+    set +e
+    wait "$pid"
+    [ "$?" -eq 0 ] || failed=1
+    set -e
+  done
+  DOWNLOAD_PIDS=()
+  DOWNLOAD_PARTS=()
+  [ "$failed" -eq 0 ] || return 1
+}
+
+while read -r kind part size sha; do
+  [ "$kind" = "PART" ] || continue
+  download_part "$part" "$size" &
+  DOWNLOAD_PIDS+=("$!")
+  DOWNLOAD_PARTS+=("$part")
+  if [ "${#DOWNLOAD_PIDS[@]}" -ge 6 ]; then
+    wait_download_batch
+  fi
+done < "$MANIFEST"
+
+if [ "${#DOWNLOAD_PIDS[@]}" -gt 0 ]; then
+  wait_download_batch
+fi
+update_download_progress
+
+progress 79 45 "다운로드 완료 · 무결성 검사"
 while read -r kind part size sha; do
   [ "$kind" = "PART" ] || continue
   actual_size=$(stat -c %s "$CACHE_DIR/$part")
