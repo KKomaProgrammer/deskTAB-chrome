@@ -19,6 +19,7 @@
             </intent-filter>
         </activity>
         <service android:name=".SetupService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <service android:name=".TermuxResultService" android:exported="false" />
         <receiver android:name=".SetupDoneReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="com.kkomaprogrammer.desktabchrome.SETUP_PROGRESS" />
