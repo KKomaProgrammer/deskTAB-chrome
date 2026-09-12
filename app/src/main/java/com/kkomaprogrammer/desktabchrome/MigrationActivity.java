@@ -16,30 +16,45 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 
-/**
- * One-time v10 migration gate.
- *
- * v1.2.15 could legitimately keep an xz/tar extractor alive at 82% for a long time.
- * The v10 installer changes the archive format and extraction engine, so the old process
- * must be stopped before MainActivity is allowed to see its heartbeat and reject a restart.
- */
+/** One-time gate that stops the old v9 xz extractor before v10 starts. */
 public class MigrationActivity extends Activity {
     private static final String TERMUX = "com.termux";
     private static final String RUN_PERMISSION = "com.termux.permission.RUN_COMMAND";
+    private static final int REQ_RUN_PERMISSION = 3010;
     private static final String HEARTBEAT_PATH =
             "/data/data/com.termux/files/home/.desktab/heartbeat";
     private static final String HEARTBEAT_STATE_PATH =
             "/data/data/com.termux/files/home/.desktab/heartbeat-state";
+    private boolean migrationStarted = false;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
         TextView t = new TextView(this);
         t.setText("deskTAB Chrome\n고속 해제 엔진 v10 적용 중…");
         t.setTextSize(20);
         t.setGravity(Gravity.CENTER);
         setContentView(t);
 
+        SharedPreferences p = getSharedPreferences("state", MODE_PRIVATE);
+        boolean needsMigration = !p.getBoolean("migration_v10_done", false)
+                && !p.getBoolean("ready", false);
+        if (needsMigration && installed(TERMUX)
+                && checkSelfPermission(RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{RUN_PERMISSION}, REQ_RUN_PERMISSION);
+            return;
+        }
+        startMigration();
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions,
+                                                     int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_RUN_PERMISSION) startMigration();
+    }
+
+    private synchronized void startMigration() {
+        if (migrationStarted) return;
+        migrationStarted = true;
         new Thread(() -> {
             migrateIfNeeded();
             runOnUiThread(() -> {
@@ -59,12 +74,14 @@ public class MigrationActivity extends Activity {
             if (installed(TERMUX)
                     && checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
                 sendCleanup(pid);
-                // Give Termux enough time to terminate the old foreground xz/tar pipeline.
-                SystemClock.sleep(1200);
+                SystemClock.sleep(1400);
             }
+            // Clear stale v9 state after the kill attempt, so MainActivity cannot mistake
+            // a dead extractor for an active setup and refuse the v10 restart.
             clearTermuxStateFile(HEARTBEAT_PATH);
             clearTermuxStateFile(HEARTBEAT_STATE_PATH);
             p.edit()
+                    .putBoolean("ready", false)
                     .putBoolean("setup_running", false)
                     .putInt("setup_engine_version", 10)
                     .putInt("setup_progress", 0)
@@ -74,7 +91,6 @@ public class MigrationActivity extends Activity {
                     .putLong("setup_eta_at", System.currentTimeMillis())
                     .apply();
         }
-
         p.edit().putBoolean("migration_v10_done", true).apply();
     }
 
@@ -121,11 +137,10 @@ public class MigrationActivity extends Activity {
                 "target=" + Math.max(0, pid) + "; " +
                 "kill_tree(){ p=\"$1\"; for c in $(ps -A -o PID=,PPID= 2>/dev/null | awk -v q=\"$p\" '$2==q {print $1}'); do kill_tree \"$c\"; done; kill -TERM \"$p\" >/dev/null 2>&1 || true; }; " +
                 "if [ \"$target\" -gt 1 ] 2>/dev/null; then kill_tree \"$target\"; fi; " +
-                "sleep 1; " +
-                "self=$$; parent=$PPID; while read -r p pp args; do " +
+                "sleep 1; self=$$; parent=$PPID; while read -r p pp args; do " +
                 "[ -n \"$p\" ] || continue; [ \"$p\" = \"$self\" ] && continue; [ \"$p\" = \"$parent\" ] && continue; " +
-                "case \"$args\" in *runtime-arm64.tar.xz*|*runtime-arm64.tar.zst*) " +
-                "case \"$args\" in *tar*|*xz*|*zstd*) kill -TERM \"$p\" >/dev/null 2>&1 || true;; esac;; esac; " +
+                "case \"$args\" in *desktab-bootstrap.sh*|*runtime-arm64.tar.xz*|*runtime-arm64.tar.zst*) " +
+                "case \"$args\" in *bash*|*tar*|*xz*|*zstd*) kill -TERM \"$p\" >/dev/null 2>&1 || true;; esac;; esac; " +
                 "done < <(ps -A -o PID=,PPID=,ARGS= 2>/dev/null || true); " +
                 "rm -rf \"$HOME/.desktab/bootstrap.lock\"; " +
                 "rm -f \"$HOME/.desktab/heartbeat\" \"$HOME/.desktab/heartbeat-state\"";
