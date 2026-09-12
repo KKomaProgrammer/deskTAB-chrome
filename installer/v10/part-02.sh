@@ -42,7 +42,7 @@ remove_tree_monitored() {
   while kill -0 "$pid" >/dev/null 2>&1; do
     now="$(date +%s)"
     elapsed=$((now - start))
-    progress 82 0 "$label · ${elapsed}초"
+    progress "$CURRENT_PCT" 0 "$label · ${elapsed}초"
     sleep 1
   done
   wait "$pid"
@@ -67,6 +67,13 @@ fi
 # v10 intentionally supersedes any previous v9 extractor that can sit at 82% for a long time.
 progress 1 360 "이전 설치 프로세스 안전 종료"
 cleanup_previous_installer
+# A killed v9 extraction can leave multiple gigabytes in .ubuntu.new.*. Remove it
+# before downloading the new runtime, otherwise the zstd download itself can run out of space.
+progress 1 0 "이전 82% 미완료 rootfs 선제 정리"
+LEGACY_STALE_PARENT="$PREFIX/var/lib/proot-distro/installed-rootfs"
+MODERN_STALE_PARENT="$PREFIX/var/lib/proot-distro/containers/ubuntu"
+while IFS= read -r -d '' stale; do remove_tree_monitored "$stale" "이전 xz 임시 rootfs 삭제"; done < <(find "$LEGACY_STALE_PARENT" -maxdepth 1 -type d -name '.ubuntu.new.*' -print0 2>/dev/null)
+while IFS= read -r -d '' stale; do remove_tree_monitored "$stale" "이전 zstd 임시 rootfs 삭제"; done < <(find "$MODERN_STALE_PARENT" -maxdepth 1 -type d -name '.rootfs.new.*' -print0 2>/dev/null)
 acquire_lock
 trap failed ERR
 trap cleanup EXIT
@@ -141,10 +148,3 @@ DOWNLOAD_PIDS=()
 START_TS="$(date +%s)"
 update_download_progress() {
   local done=0 j f partial size expected now elapsed pct eta
-  for ((j=0; j<PART_COUNT; j++)); do
-    f="$CACHE_DIR/${PART_NAMES[$j]}"; partial="$CACHE_DIR/.${PART_NAMES[$j]}.partial"; expected="${PART_SIZES[$j]}"
-    if [ -f "$f" ]; then size="$(stat -c %s "$f" 2>/dev/null || printf 0)";
-    elif [ -f "$partial" ]; then size="$(stat -c %s "$partial" 2>/dev/null || printf 0)";
-    else size=0; fi
-    [ "$size" -gt "$expected" ] && size="$expected"
-    done=$((done + size))
