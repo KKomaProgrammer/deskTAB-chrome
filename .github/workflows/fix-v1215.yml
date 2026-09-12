@@ -1,0 +1,50 @@
+name: One-off installer hardening v1.2.15
+
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-v1215.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Apply v1.2.15 installer patch
+        run: python3 tools/patch_v1215.py
+
+      - name: Validate patched installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n app/src/main/assets/bootstrap.sh
+          grep -q "versionName '1.2.15'" app/build.gradle
+          grep -q 'versionCode 18' app/build.gradle
+          grep -q 'ENGINE_VERSION = 9' app/src/main/java/com/kkomaprogrammer/desktabchrome/MainActivity.java
+          grep -q 'ENGINE_VERSION = 9' app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java
+          grep -q 'validate_manifest_file' app/src/main/assets/bootstrap.sh
+          grep -q 'mapfile -t PART_NAMES' app/src/main/assets/bootstrap.sh
+          grep -q 'for ((i=0; i<PART_COUNT; i++))' app/src/main/assets/bootstrap.sh
+          grep -q 'sha256sum "$ARCHIVE_TMP"' app/src/main/assets/bootstrap.sh
+          grep -q 'xz -t "$ARCHIVE_FILE"' app/src/main/assets/bootstrap.sh
+          ! grep -q 'done < "$MANIFEST"' app/src/main/assets/bootstrap.sh
+          ! grep -q 'pkill -f google-chrome-stable' app/src/main/assets/bootstrap.sh
+          ! grep -q 'pkill -f xfce4-session' app/src/main/assets/bootstrap.sh
+
+      - name: Commit v1.2.15 app changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/assets/bootstrap.sh app/build.gradle \
+            app/src/main/java/com/kkomaprogrammer/desktabchrome/MainActivity.java \
+            app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java
+          git commit -m 'Make runtime manifest and assembly deterministic'
+          git push origin HEAD:main
