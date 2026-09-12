@@ -23,7 +23,7 @@ failed() {
 }
 trap failed ERR
 
-# 이전 v1.1 설치가 남아 있으면 먼저 종료해 apt/rootfs 잠금 충돌을 없앤다.
+# 이전 설치가 남아 있으면 먼저 종료해 apt/rootfs 잠금 충돌을 없앤다.
 pkill -f 'proot-distro install ubuntu' >/dev/null 2>&1 || true
 pkill -f 'proot.*installed-rootfs/ubuntu' >/dev/null 2>&1 || true
 pkill -f 'proot.*containers/ubuntu' >/dev/null 2>&1 || true
@@ -41,7 +41,8 @@ if [ "$ARCH" != "aarch64" ]; then
   exit 41
 fi
 
-progress 2 285 "Termux 저장소 초기화"
+# 이 방송이 오면 앱은 Termux RUN_COMMAND가 실제로 시작됐음을 확인할 수 있다.
+progress 2 285 "Termux 명령 실행 확인 · 저장소 초기화"
 mkdir -p "$PREFIX/etc/apt/sources.list.d"
 printf '%s\n' 'deb https://packages.termux.dev/apt/termux-main stable main' > "$PREFIX/etc/apt/sources.list"
 printf '%s\n' 'deb https://packages.termux.dev/apt/termux-x11 x11 main' > "$PREFIX/etc/apt/sources.list.d/x11.list"
@@ -164,7 +165,7 @@ chmod +x "$STATE_DIR/launch.sh"
 
 rm -rf "$CACHE_DIR"
 mkdir -p "$CACHE_DIR"
-printf '%s\n' '2' > "$STATE_DIR/engine-version"
+printf '%s\n' '3' > "$STATE_DIR/engine-version"
 touch "$STATE_DIR/ready"
 progress 100 0 "고속 설정 완료"
 /system/bin/am broadcast -a "$APP_PACKAGE.SETUP_DONE" -p "$APP_PACKAGE" >/dev/null 2>&1 || true
