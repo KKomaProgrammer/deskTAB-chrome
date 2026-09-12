@@ -26,7 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq xz-utils
+          sudo apt-get install -y -qq zstd
           rm -rf /tmp/desktab-publish
           mkdir -p /tmp/desktab-publish
           docker build --pull -t desktab-runtime:arm64 runtime
@@ -44,18 +44,43 @@ jobs:
             done
           '
 
+          # Record the real logical file bytes so the Android installer can reject
+          # an extraction before starting when there is not enough free space.
+          ROOTFS_FILE_BYTES=$(docker run --rm desktab-runtime:arm64 /bin/bash -lc \
+            "find / -xdev -type f -printf '%s\\n' 2>/dev/null | awk '{s+=\$1} END {printf \"%.0f\\n\", s}'")
+          test -n "$ROOTFS_FILE_BYTES"
+          test "$ROOTFS_FILE_BYTES" -gt 0
+          printf '%s\n' "$ROOTFS_FILE_BYTES" > /tmp/desktab-rootfs-file-bytes
+
           CID=$(docker create desktab-runtime:arm64)
           trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
-          docker export "$CID" | xz -T0 -6 -c > /tmp/desktab-runtime-arm64.tar.xz
-          xz -t /tmp/desktab-runtime-arm64.tar.xz
+
+          # zstd is deliberately used instead of xz. On ARM Android it decompresses
+          # far faster while retaining a compact single verified archive.
+          rm -f /tmp/desktab-rootfs-tar-bytes
+          docker export "$CID" \
+            | tee >(wc -c | tr -d ' ' > /tmp/desktab-rootfs-tar-bytes) \
+            | zstd -T0 -10 -q -c > /tmp/desktab-runtime-arm64.tar.zst
+          for _ in $(seq 1 50); do
+            [ -s /tmp/desktab-rootfs-tar-bytes ] && break
+            sleep 0.1
+          done
+          test -s /tmp/desktab-rootfs-tar-bytes
+          zstd -t -q /tmp/desktab-runtime-arm64.tar.zst
+          zstd -d -q -c /tmp/desktab-runtime-arm64.tar.zst | tar -tf - >/dev/null
 
       - name: Split, checksum and self-test runtime
         run: |
           set -euo pipefail
-          ARCHIVE=/tmp/desktab-runtime-arm64.tar.xz
+          ARCHIVE=/tmp/desktab-runtime-arm64.tar.zst
           PART_SIZE=50331648
           ARCHIVE_SIZE=$(stat -c %s "$ARCHIVE")
           ARCHIVE_SHA=$(sha256sum "$ARCHIVE" | awk '{print $1}')
+          ROOTFS_TAR_SIZE=$(cat /tmp/desktab-rootfs-tar-bytes)
+          ROOTFS_FILE_BYTES=$(cat /tmp/desktab-rootfs-file-bytes)
+          test "$ROOTFS_TAR_SIZE" -gt "$ARCHIVE_SIZE"
+          test "$ROOTFS_FILE_BYTES" -gt 0
+
           split -b 48M -d -a 3 "$ARCHIVE" /tmp/desktab-publish/runtime-arm64.part-
           PART_COUNT=$(find /tmp/desktab-publish -maxdepth 1 -type f -name 'runtime-arm64.part-*' | wc -l | tr -d ' ')
           EXPECTED_COUNT=$(( (ARCHIVE_SIZE + PART_SIZE - 1) / PART_SIZE ))
@@ -64,9 +89,12 @@ jobs:
           {
             echo "VERSION $GITHUB_SHA"
             echo "ARCH arm64"
-            echo "FORMAT xz"
+            echo "FORMAT zst"
+            echo "ARCHIVE_NAME runtime-arm64.tar.zst"
             echo "ARCHIVE_SIZE $ARCHIVE_SIZE"
             echo "ARCHIVE_SHA256 $ARCHIVE_SHA"
+            echo "ROOTFS_TAR_SIZE $ROOTFS_TAR_SIZE"
+            echo "ROOTFS_FILE_BYTES $ROOTFS_FILE_BYTES"
             echo "PART_SIZE_BYTES $PART_SIZE"
             echo "PART_COUNT $PART_COUNT"
             for f in /tmp/desktab-publish/runtime-arm64.part-*; do
@@ -77,7 +105,8 @@ jobs:
             done
           } > /tmp/desktab-publish/manifest.txt
 
-          # Verify names, count, total size, every SHA, and exact reassembly before publish.
+          # Verify names, count, total size, every SHA, exact reassembly and both
+          # zstd + tar stream integrity before the runtime-image branch is updated.
           SUM=0
           INDEX=0
           while read -r kind name size sha; do
@@ -92,13 +121,16 @@ jobs:
           test "$INDEX" -eq "$PART_COUNT"
           test "$SUM" -eq "$ARCHIVE_SIZE"
 
-          cat /tmp/desktab-publish/runtime-arm64.part-* > /tmp/desktab-runtime-reassembled.tar.xz
-          test "$(stat -c %s /tmp/desktab-runtime-reassembled.tar.xz)" = "$ARCHIVE_SIZE"
-          test "$(sha256sum /tmp/desktab-runtime-reassembled.tar.xz | awk '{print $1}')" = "$ARCHIVE_SHA"
-          cmp -s "$ARCHIVE" /tmp/desktab-runtime-reassembled.tar.xz
-          xz -t /tmp/desktab-runtime-reassembled.tar.xz
+          cat /tmp/desktab-publish/runtime-arm64.part-* > /tmp/desktab-runtime-reassembled.tar.zst
+          test "$(stat -c %s /tmp/desktab-runtime-reassembled.tar.zst)" = "$ARCHIVE_SIZE"
+          test "$(sha256sum /tmp/desktab-runtime-reassembled.tar.zst | awk '{print $1}')" = "$ARCHIVE_SHA"
+          cmp -s "$ARCHIVE" /tmp/desktab-runtime-reassembled.tar.zst
+          zstd -t -q /tmp/desktab-runtime-reassembled.tar.zst
+          zstd -d -q -c /tmp/desktab-runtime-reassembled.tar.zst | tar -tf - >/dev/null
 
           du -h "$ARCHIVE"
+          echo "Uncompressed tar bytes: $ROOTFS_TAR_SIZE"
+          echo "Rootfs regular-file bytes: $ROOTFS_FILE_BYTES"
           ls -lh /tmp/desktab-publish
           cat /tmp/desktab-publish/manifest.txt
 
@@ -112,7 +144,8 @@ jobs:
           mkdir -p runtime
           cp /tmp/desktab-publish/* runtime/
           printf '%s\n' '# deskTAB Chrome prebuilt runtime' '' \
-            'Generated automatically. Contains the prebuilt ARM64 Ubuntu + XFCE + Google Chrome runtime used by the Android fast installer.' > README.md
+            'Generated automatically. Contains the prebuilt ARM64 Ubuntu + XFCE + Google Chrome runtime used by the Android fast installer.' \
+            'The archive uses zstd so extraction on ARM Android is substantially faster than the previous xz runtime.' > README.md
           git add -f runtime README.md
-          git commit -m "Update prebuilt ARM64 runtime ($GITHUB_SHA)"
+          git commit -m "Update zstd ARM64 runtime ($GITHUB_SHA)"
           git push --force origin HEAD:runtime-image
