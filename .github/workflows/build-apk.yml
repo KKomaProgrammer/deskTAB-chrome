@@ -44,11 +44,12 @@ jobs:
           set -euo pipefail
           bash -n app/src/main/assets/bootstrap.sh
           cat installer/v10/part-*.sh > /tmp/desktab-installer-v10.sh
-          test "$(sha256sum /tmp/desktab-installer-v10.sh | awk '{print $1}')" = "b90141471bc8242f1d626cdbfc58b2b508742a015d0b626233401289ed6599d0"
+          test "$(sha256sum /tmp/desktab-installer-v10.sh | awk '{print $1}')" = "11386ff16c7e649303737e597c0a8e1b4e1155b29532c62deff55e56f7eb9ef3"
           bash -n /tmp/desktab-installer-v10.sh
           grep -q 'FORMAT"{print $2' /tmp/desktab-installer-v10.sh
           grep -q '\[ "$fmt" = zst \]' /tmp/desktab-installer-v10.sh
           grep -q 'ROOTFS_FILE_BYTES' /tmp/desktab-installer-v10.sh
+          grep -q '이전 82% 미완료 rootfs 선제 정리' /tmp/desktab-installer-v10.sh
           grep -q 'zstd -d -q -c' /tmp/desktab-installer-v10.sh
           grep -q -- '--checkpoint=' /tmp/desktab-installer-v10.sh
           grep -q '120초 동안 진행되지 않아 자동 중단' /tmp/desktab-installer-v10.sh
