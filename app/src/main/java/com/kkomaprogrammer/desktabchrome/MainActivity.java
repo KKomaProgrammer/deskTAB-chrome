@@ -27,8 +27,6 @@ import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 
 import java.io.File;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 
 public class MainActivity extends Activity {
     private static final String TERMUX = "com.termux";
@@ -149,7 +147,7 @@ public class MainActivity extends Activity {
         root.addView(button("세션 종료", v -> stopDesktop()));
 
         TextView note = new TextView(this);
-        note.setText("v1.2.4부터 설치 버튼을 누른 화면(Activity)에서 Termux를 직접 호출합니다. 5초 안에 app-shell이 시작되지 않으면 보이는 terminal-session 방식으로 자동 재시도합니다. X11 패키지가 준비되는 즉시 :1 서버도 자동 시작합니다.");
+        note.setText("v1.2.4부터 설치 버튼을 누른 화면(Activity)에서 Termux를 직접 호출합니다. 5초 안에 app-shell이 시작되지 않으면 보이는 terminal-session 방식으로 자동 재시도합니다. 두 방식 모두 stdin에 의존하지 않고 동일한 bootstrap 명령을 실행하며, X11 패키지가 준비되는 즉시 :1 서버도 자동 시작합니다.");
         note.setTextSize(13);
         note.setPadding(0, dp(20), 0, dp(8));
         root.addView(note);
@@ -331,8 +329,6 @@ public class MainActivity extends Activity {
                 .putLong("setup_start", now)
                 .apply();
 
-        // 먼저 추적용 foreground service를 올린다. 상태를 미리 current engine으로 기록했으므로
-        // SetupService는 Termux를 다시 호출하지 않고 진행률/알림만 추적한다.
         ContextCompat.startForegroundService(this,
                 new Intent(this, SetupService.class).setAction(SetupService.ACTION_BOOTSTRAP));
 
@@ -343,7 +339,6 @@ public class MainActivity extends Activity {
             prefs.edit().putString("termux_last_error", e.getClass().getSimpleName() + ": " + e.getMessage()).apply();
         }
 
-        // app-shell이 삼성/Android 정책으로 막히는 경우 5초 후 보이는 terminal-session으로 자동 재시도한다.
         handler.postDelayed(() -> {
             if (!prefs.getBoolean("setup_running", false)) return;
             if (prefs.getInt("setup_engine_version", 0) != SetupService.ENGINE_VERSION) return;
@@ -359,7 +354,6 @@ public class MainActivity extends Activity {
             }
         }, 5000);
 
-        // 두 공식 RUN_COMMAND 모드가 모두 차단된 특수 ROM에서는 수동 1회 실행용 명령을 자동 준비한다.
         handler.postDelayed(() -> {
             if (!prefs.getBoolean("setup_running", false)) return;
             if (prefs.getInt("setup_progress", 1) > 1) return;
@@ -371,9 +365,7 @@ public class MainActivity extends Activity {
         refreshStatus();
     }
 
-    private void startBootstrapFromForegroundActivity(boolean visibleTerminal) throws Exception {
-        String script = readAsset("bootstrap.sh");
-
+    private void startBootstrapFromForegroundActivity(boolean visibleTerminal) {
         Intent callback = new Intent(this, TermuxResultService.class)
                 .setAction(TermuxResultService.ACTION_BOOTSTRAP_RESULT);
         int piFlags = PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_ONE_SHOT;
@@ -385,9 +377,8 @@ public class MainActivity extends Activity {
         i.setClassName(TERMUX, "com.termux.app.RunCommandService");
         i.setAction("com.termux.RUN_COMMAND");
         i.putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash");
-        i.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", new String[]{"-s"});
+        i.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", new String[]{"-lc", MANUAL_BOOTSTRAP_COMMAND});
         i.putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home");
-        i.putExtra("com.termux.RUN_COMMAND_STDIN", script);
         i.putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultIntent);
         i.putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "deskTAB Linux setup");
         i.putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "deskTAB Ubuntu/XFCE/Chrome runtime setup");
@@ -405,18 +396,6 @@ public class MainActivity extends Activity {
 
         android.content.ComponentName started = startService(i);
         if (started == null) throw new IllegalStateException("Termux RunCommandService returned null");
-    }
-
-    private String readAsset(String name) throws Exception {
-        try (InputStream in = getAssets().open(name)) {
-            byte[] buf = new byte[8192];
-            StringBuilder b = new StringBuilder();
-            int n;
-            while ((n = in.read(buf)) > 0) {
-                b.append(new String(buf, 0, n, StandardCharsets.UTF_8));
-            }
-            return b.toString();
-        }
     }
 
     private void launchDesktopChrome() {
