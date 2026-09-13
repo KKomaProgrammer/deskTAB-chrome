@@ -38,11 +38,12 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Validate pinned v11 Termux installer
+      - name: Validate pinned v11 installer and v1.2.18 desktop repair
         shell: bash
         run: |
           set -euo pipefail
           bash -n app/src/main/assets/bootstrap.sh
+          bash -n installer/repair-v12.sh
           cat installer/v10/part-*.sh > /tmp/desktab-installer-v11.sh
           bash -n /tmp/desktab-installer-v11.sh
           python3 - <<'PY'
@@ -50,13 +51,17 @@ jobs:
 
           loader = Path('app/src/main/assets/bootstrap.sh').read_text()
           installer = Path('/tmp/desktab-installer-v11.sh').read_text()
+          repair = Path('installer/repair-v12.sh').read_text()
           main = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/MainActivity.java').read_text()
           service = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java').read_text()
           gradle = Path('app/build.gradle').read_text()
 
           required_loader = [
-              'INSTALLER_COMMIT="c31d47bd6d7f969e87372461b4f73393d5e9d377"',
+              'INSTALLER_COMMIT="0419682c3721b8c836585d781838ba9f3cdd6023"',
               'INSTALLER_DIR="$STATE_DIR/installer-v11"',
+              'REPAIR_URL=',
+              'desktop-repair-v12.sh',
+              'proot-distro login ubuntu --shared-tmp',
           ]
           required_installer = [
               'ROOTFS_FILE_BYTES',
@@ -75,16 +80,35 @@ jobs:
               'opt/google/chrome/google-chrome',
               'var/lib/dpkg/status',
           ]
+          required_repair = [
+              '/usr/bin/xfce4-terminal --disable-server',
+              'SingletonLock',
+              'SingletonSocket',
+              '--new-window',
+              '--disable-gpu',
+              '--renderer-process-limit=4',
+              '/general/use_compositing',
+              'if pgrep -x xfce4-session',
+              'termux-wake-lock',
+              'desktab-resolv.conf',
+              'dbus-launch --exit-with-session /usr/local/bin/desktab-xfce-session',
+              'custom-TerminalEmulator',
+              'custom-WebBrowser',
+              'custom-FileManager',
+          ]
           for needle in required_loader:
               assert needle in loader, f'missing loader invariant: {needle}'
           for needle in required_installer:
               assert needle in installer, f'missing installer invariant: {needle}'
+          for needle in required_repair:
+              assert needle in repair, f'missing repair invariant: {needle}'
           assert 'tar -xJpf' not in installer
           assert 'private static final int ENGINE_VERSION = 11;' in main
           assert 'public static final int ENGINE_VERSION = 11;' in service
-          assert "versionName '1.2.17'" in gradle
-          assert 'versionCode 20' in gradle
-          print('v11 installer invariants OK')
+          assert 'termux-x11-universal-sharedUid-debug.apk' in service
+          assert "versionName '1.2.18'" in gradle
+          assert 'versionCode 21' in gradle
+          print('v1.2.18 installer + desktop repair invariants OK')
           PY
 
       - name: Validate published zstd runtime metadata
