@@ -87,37 +87,95 @@ ps_table() {
   ps -A -o PID=,PPID=,ARGS= 2>/dev/null || /system/bin/ps -A -o PID=,PPID=,ARGS= 2>/dev/null || true
 }
 
+pid_args() {
+  ps_table | awk -v p="$1" '$1==p {$1=""; $2=""; sub(/^[[:space:]]+/,""); print; exit}'
+}
+
+is_ancestor_pid() {
+  local target="$1" cur="${PPID:-0}" next
+  case "$target" in ''|*[!0-9]*) return 1;; esac
+  while [ "$cur" -gt 1 ] 2>/dev/null; do
+    [ "$cur" = "$target" ] && return 0
+    next="$(ps -o PPID= -p "$cur" 2>/dev/null | tr -d '[:space:]' || true)"
+    case "$next" in ''|*[!0-9]*) break;; esac
+    [ "$next" = "$cur" ] && break
+    cur="$next"
+  done
+  return 1
+}
+
 kill_tree() {
   local parent="$1" child
   while read -r child; do
     [ -n "$child" ] || continue
+    [ "$child" = "$$" ] && continue
     kill_tree "$child"
   done < <(ps_table | awk -v p="$parent" '$2==p {print $1}')
-  kill -TERM "$parent" >/dev/null 2>&1 || true
+  [ "$parent" = "$$" ] || kill -TERM "$parent" >/dev/null 2>&1 || true
+}
+
+wait_dead() {
+  local pid="$1" n
+  for n in $(seq 1 20); do
+    kill -0 "$pid" >/dev/null 2>&1 || return 0
+    sleep 0.1
+  done
+  return 1
 }
 
 cleanup_previous_installer() {
-  local pid ppid args
-  while read -r pid ppid args; do
+  local oldpid args pid ppid pargs
+
+  # Only the process that actually owns our lock can be an old installer. The old
+  # implementation scanned every command line containing desktab-bootstrap.sh and
+  # could therefore kill the CURRENT loader (its own parent) and recursively kill
+  # itself. Never terminate an ancestor of the current process.
+  oldpid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+  case "$oldpid" in
+    ''|*[!0-9]*) ;;
+    *)
+      if [ "$oldpid" != "$$" ] && kill -0 "$oldpid" >/dev/null 2>&1; then
+        if is_ancestor_pid "$oldpid"; then
+          log "현재 실행의 상위 프로세스 PID $oldpid 보호 · 종료하지 않음"
+        else
+          args="$(pid_args "$oldpid")"
+          case "$args" in
+            *desktab-bootstrap*|*installer-v11*|*desktop-repair*)
+              log "이전 deskTAB 설치 프로세스 종료: PID $oldpid"
+              kill_tree "$oldpid"
+              if ! wait_dead "$oldpid"; then
+                kill -KILL "$oldpid" >/dev/null 2>&1 || true
+              fi
+              ;;
+            *)
+              log "stale lock PID $oldpid 는 deskTAB 프로세스가 아니므로 종료하지 않음"
+              ;;
+          esac
+        fi
+      fi
+      ;;
+  esac
+  rm -rf "$LOCK_DIR"
+
+  # Clean only orphaned archive workers that reference deskTAB's own runtime cache.
+  # This cannot match the loader/current installer and avoids broad process killing.
+  while read -r pid ppid pargs; do
     [ -n "${pid:-}" ] || continue
     [ "$pid" = "$$" ] && continue
-    case "$args" in
-      *"/desktab-bootstrap.sh"*|*"desktab-bootstrap.sh"*)
-        log "이전 deskTAB 설치 프로세스 종료: PID $pid"
-        kill_tree "$pid"
-        ;;
-      *"runtime-arm64.tar.xz"*|*"runtime-arm64.tar.zst"*)
-        case "$args" in
-          *tar*|*xz*|*zstd*)
-            log "이전 이미지 해제 프로세스 종료: PID $pid"
+    is_ancestor_pid "$pid" && continue
+    case "$pargs" in
+      *"$CACHE_ROOT"*runtime-arm64.tar.zst*)
+        case "$pargs" in
+          *zstd*|*tar*)
+            log "이전 이미지 해제 worker 종료: PID $pid"
             kill_tree "$pid"
+            wait_dead "$pid" || kill -KILL "$pid" >/dev/null 2>&1 || true
             ;;
         esac
         ;;
     esac
   done < <(ps_table)
-  sleep 1
-  rm -rf "$LOCK_DIR"
+  return 0
 }
 
 acquire_lock() {
@@ -125,6 +183,14 @@ acquire_lock() {
     OWN_LOCK=1
     printf '%s\n' "$$" > "$LOCK_DIR/pid"
     return 0
+  fi
+
+  # A new installer may have won the race after cleanup. Never delete a live lock.
+  local owner
+  owner="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+  if printf '%s' "$owner" | grep -qE '^[0-9]+$' && kill -0 "$owner" >/dev/null 2>&1; then
+    log "다른 deskTAB 설치가 이미 시작됨: PID $owner"
+    return 48
   fi
   rm -rf "$LOCK_DIR"
   mkdir "$LOCK_DIR"
