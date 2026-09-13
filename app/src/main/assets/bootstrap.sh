@@ -63,8 +63,6 @@ fail_loader() {
   exit 90
 }
 
-# The Android watchdog now sees a valid heartbeat before curl, PRoot health checks,
-# old-process cleanup, or any network request can take time.
 loader_progress 1 60 "Termux bootstrap 실행 확인 · 기존 Linux 환경 판정"
 loader_heartbeat_loop &
 LOADER_HB_PID=$!
@@ -95,15 +93,29 @@ fetch_file "$REPAIR_URL" "$REPAIR" || fail_loader "desktop repair 다운로드 �
 bash -n "$REPAIR" || fail_loader "desktop repair 셸 문법 검사 실패"
 chmod 700 "$REPAIR"
 
-# Do NOT require STATE_DIR/ready here. Older failed/repaired versions could lose
-# that marker even though the Ubuntu rootfs itself was perfectly healthy. The
-# actual binaries inside PRoot are the source of truth.
+# Do NOT require STATE_DIR/ready. The actual rootfs is the source of truth. Check
+# the modern and legacy proot-distro root paths directly first; this is instant and
+# cannot hang merely because an XFCE/Chrome PRoot session is already active.
 loader_progress 1 35 "기존 Ubuntu/Chrome 실제 상태 확인"
 RUNTIME_HEALTHY=1
-if command -v proot-distro >/dev/null 2>&1; then
+for ROOT in \
+  "$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs" \
+  "$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu"; do
+  if [ -x "$ROOT/usr/bin/xfce4-session" ] \
+    && [ -x "$ROOT/usr/bin/xfce4-terminal" ] \
+    && [ -x "$ROOT/opt/google/chrome/google-chrome" ] \
+    && [ -f "$ROOT/var/lib/dpkg/status" ]; then
+    RUNTIME_HEALTHY=0
+    break
+  fi
+done
+
+# Filesystem layout can change in future proot-distro builds. Only then use a
+# bounded PRoot probe as a compatibility fallback; heartbeat continues meanwhile.
+if [ "$RUNTIME_HEALTHY" -ne 0 ] && command -v proot-distro >/dev/null 2>&1; then
   set +e
   if command -v timeout >/dev/null 2>&1; then
-    timeout 30 proot-distro login ubuntu --shared-tmp -- /bin/bash -lc \
+    timeout 15 proot-distro login ubuntu --shared-tmp -- /bin/bash -lc \
       'test -x /usr/bin/xfce4-session && test -x /usr/bin/xfce4-terminal && command -v google-chrome-stable >/dev/null'
     RUNTIME_HEALTHY=$?
   else
@@ -112,8 +124,6 @@ if command -v proot-distro >/dev/null 2>&1; then
     RUNTIME_HEALTHY=$?
   fi
   set -e
-else
-  RUNTIME_HEALTHY=1
 fi
 
 if [ "$RUNTIME_HEALTHY" -eq 0 ]; then
