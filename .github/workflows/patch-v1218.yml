@@ -43,24 +43,6 @@ jobs:
               'https://github.com/termux/termux-x11/releases/download/nightly/termux-x11-universal-sharedUid-debug.apk'
           )
           p.write_text(s)
-
-          p = Path('.github/workflows/build-apk.yml')
-          s = p.read_text()
-          s = s.replace('INSTALLER_COMMIT=\\"c31d47bd6d7f969e87372461b4f73393d5e9d377\\"',
-                        'INSTALLER_COMMIT=\\"0419682c3721b8c836585d781838ba9f3cdd6023\\"')
-          s = s.replace("assert \"versionName '1.2.17'\" in gradle", "assert \"versionName '1.2.18'\" in gradle")
-          s = s.replace("assert 'versionCode 20' in gradle", "assert 'versionCode 21' in gradle")
-          marker = "          bash -n app/src/main/assets/bootstrap.sh\n"
-          if "bash -n installer/repair-v12.sh" not in s:
-              s = s.replace(marker, marker + "          bash -n installer/repair-v12.sh\n")
-          needle = "          assert 'private static final int ENGINE_VERSION = 11;' in main\n"
-          if "sharedUid-debug.apk" not in s:
-              s = s.replace(needle,
-                  "          assert 'termux-x11-universal-sharedUid-debug.apk' in service\n"
-                  "          assert 'REPAIR_URL=' in loader\n"
-                  "          assert 'desktop-repair-v12.sh' in loader\n"
-                  "          assert 'private static final int ENGINE_VERSION = 11;' in main\n")
-          p.write_text(s)
           PY
 
           bash -n app/src/main/assets/bootstrap.sh
@@ -74,7 +56,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add app/build.gradle \
                   app/src/main/java/com/kkomaprogrammer/desktabchrome/MainActivity.java \
-                  app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java \
-                  .github/workflows/build-apk.yml
+                  app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java
           git commit -m 'Release v1.2.18 desktop relaunch and performance fix'
           git push origin HEAD:main
