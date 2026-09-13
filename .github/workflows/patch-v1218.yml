@@ -1,0 +1,80 @@
+name: Apply v1.2.18 desktop repair release
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/patch-v1218.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Apply v1.2.18 metadata and performance defaults
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('app/build.gradle')
+          s = p.read_text()
+          s = re.sub(r'versionCode\s+\d+', 'versionCode 21', s)
+          s = re.sub(r"versionName\s+'[^']+'", "versionName '1.2.18'", s)
+          p.write_text(s)
+
+          p = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/MainActivity.java')
+          s = p.read_text()
+          s = s.replace(
+              'v1.2.17은 zstd 해제 작업의 ERR trap 오동작과 Android 메타데이터 호환 문제를 해결했습니다. 기존 다운로드/검증/heartbeat는 유지하고, 새 rootfs를 완전히 검증한 뒤에만 기존 환경과 교체합니다.',
+              'v1.2.18은 XFCE/Chrome을 한 번 닫은 뒤 다시 열리지 않는 문제를 수리합니다. 기존 Linux 환경은 재다운로드하지 않고 반복 실행용 런처·D-Bus/세션 정리·Chrome stale lock 처리·XFCE 합성 비활성화를 적용합니다. 새 Termux:X11 설치는 공식 sharedUid 성능판을 사용합니다.'
+          )
+          p.write_text(s)
+
+          p = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java')
+          s = p.read_text().replace(
+              'https://github.com/termux/termux-x11/releases/download/nightly/termux-x11-universal-debug.apk',
+              'https://github.com/termux/termux-x11/releases/download/nightly/termux-x11-universal-sharedUid-debug.apk'
+          )
+          p.write_text(s)
+
+          p = Path('.github/workflows/build-apk.yml')
+          s = p.read_text()
+          s = s.replace('INSTALLER_COMMIT=\\"c31d47bd6d7f969e87372461b4f73393d5e9d377\\"',
+                        'INSTALLER_COMMIT=\\"0419682c3721b8c836585d781838ba9f3cdd6023\\"')
+          s = s.replace("assert \"versionName '1.2.17'\" in gradle", "assert \"versionName '1.2.18'\" in gradle")
+          s = s.replace("assert 'versionCode 20' in gradle", "assert 'versionCode 21' in gradle")
+          marker = "          bash -n app/src/main/assets/bootstrap.sh\n"
+          if "bash -n installer/repair-v12.sh" not in s:
+              s = s.replace(marker, marker + "          bash -n installer/repair-v12.sh\n")
+          needle = "          assert 'private static final int ENGINE_VERSION = 11;' in main\n"
+          if "sharedUid-debug.apk" not in s:
+              s = s.replace(needle,
+                  "          assert 'termux-x11-universal-sharedUid-debug.apk' in service\n"
+                  "          assert 'REPAIR_URL=' in loader\n"
+                  "          assert 'desktop-repair-v12.sh' in loader\n"
+                  "          assert 'private static final int ENGINE_VERSION = 11;' in main\n")
+          p.write_text(s)
+          PY
+
+          bash -n app/src/main/assets/bootstrap.sh
+          bash -n installer/repair-v12.sh
+          grep -q "versionName '1.2.18'" app/build.gradle
+          grep -q 'termux-x11-universal-sharedUid-debug.apk' app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java
+      - name: Commit release patch
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/build.gradle \
+                  app/src/main/java/com/kkomaprogrammer/desktabchrome/MainActivity.java \
+                  app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java \
+                  .github/workflows/build-apk.yml
+          git commit -m 'Release v1.2.18 desktop relaunch and performance fix'
+          git push origin HEAD:main
