@@ -256,7 +256,7 @@ public class SetupService extends Service {
 
             if (!installed("com.termux.x11")) {
                 downloadFile(
-                        "https://github.com/termux/termux-x11/releases/download/nightly/termux-x11-universal-debug.apk",
+                        "https://github.com/termux/termux-x11/releases/download/nightly/termux-x11-universal-sharedUid-debug.apk",
                         new File(dir, "termux-x11.apk"), -1,
                         55, 44, "Termux:X11 APK 다운로드");
             } else {

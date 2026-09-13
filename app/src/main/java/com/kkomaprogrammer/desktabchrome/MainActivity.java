@@ -158,7 +158,7 @@ public class MainActivity extends Activity {
         root.addView(button("세션 종료", v -> stopDesktop()));
 
         TextView note = new TextView(this);
-        note.setText("v1.2.17은 zstd 해제 작업의 ERR trap 오동작과 Android 메타데이터 호환 문제를 해결했습니다. 기존 다운로드/검증/heartbeat는 유지하고, 새 rootfs를 완전히 검증한 뒤에만 기존 환경과 교체합니다.");
+        note.setText("v1.2.18은 XFCE/Chrome을 한 번 닫은 뒤 다시 열리지 않는 문제를 수리합니다. 기존 Linux 환경은 재다운로드하지 않고 반복 실행용 런처·D-Bus/세션 정리·Chrome stale lock 처리·XFCE 합성 비활성화를 적용합니다. 새 Termux:X11 설치는 공식 sharedUid 성능판을 사용합니다.");
         note.setTextSize(13);
         note.setPadding(0, dp(20), 0, dp(8));
         root.addView(note);
