@@ -1,16 +1,16 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -Eeuo pipefail
 
-# v1.2.19 loader: publish a heartbeat immediately, repair any already-working
+# v1.2.20 loader: publish a heartbeat immediately, repair any already-working
 # Ubuntu without depending on a stale ready marker, and only fall back to the
 # full validated runtime installer when the Linux environment is genuinely absent.
 APP_PACKAGE="com.kkomaprogrammer.desktabchrome"
 APP_RECEIVER="$APP_PACKAGE/.SetupDoneReceiver"
 STATE_DIR="$HOME/.desktab"
 INSTALLER_DIR="$STATE_DIR/installer-v11"
-INSTALLER_COMMIT="7be61dfb249f6761f8e51a5ecde7a8c09c5bb826"
+INSTALLER_COMMIT="1fdf9f66c6bb1c1ceeccaff3868b69e844df9e64"
 BASE="https://raw.githubusercontent.com/KKomaProgrammer/deskTAB-chrome/$INSTALLER_COMMIT/installer/v10"
-REPAIR_URL="https://raw.githubusercontent.com/KKomaProgrammer/deskTAB-chrome/$INSTALLER_COMMIT/installer/repair-v13.sh"
+REPAIR_URL="https://raw.githubusercontent.com/KKomaProgrammer/deskTAB-chrome/$INSTALLER_COMMIT/installer/repair-v14.sh"
 LOADER_STATE="$STATE_DIR/loader-heartbeat-state"
 LOADER_HB_PID=""
 mkdir -p "$INSTALLER_DIR"
@@ -87,7 +87,7 @@ fetch_file() {
   return 1
 }
 
-REPAIR="$INSTALLER_DIR/desktop-repair-v13.sh"
+REPAIR="$INSTALLER_DIR/desktop-repair-v14.sh"
 loader_progress 1 45 "반복 실행 수리 엔진 확인"
 fetch_file "$REPAIR_URL" "$REPAIR" || fail_loader "desktop repair 다운로드 실패"
 bash -n "$REPAIR" || fail_loader "desktop repair 셸 문법 검사 실패"
@@ -116,11 +116,11 @@ if [ "$RUNTIME_HEALTHY" -ne 0 ] && command -v proot-distro >/dev/null 2>&1; then
   set +e
   if command -v timeout >/dev/null 2>&1; then
     timeout 15 proot-distro login ubuntu --shared-tmp -- /bin/bash -lc \
-      'test -x /usr/bin/xfce4-session && test -x /usr/bin/xfce4-terminal && command -v google-chrome-stable >/dev/null'
+      'test -x /usr/bin/xfce4-session && test -x /usr/bin/xfce4-terminal && test -x /opt/google/chrome/google-chrome'
     RUNTIME_HEALTHY=$?
   else
     proot-distro login ubuntu --shared-tmp -- /bin/bash -lc \
-      'test -x /usr/bin/xfce4-session && test -x /usr/bin/xfce4-terminal && command -v google-chrome-stable >/dev/null'
+      'test -x /usr/bin/xfce4-session && test -x /usr/bin/xfce4-terminal && test -x /opt/google/chrome/google-chrome'
     RUNTIME_HEALTHY=$?
   fi
   set -e
@@ -143,6 +143,9 @@ for n in 00 01 02 03 04; do
   url="$BASE/part-$n.sh"
   fetch_file "$url" "$part" || fail_loader "installer part-$n 다운로드 실패"
   cat "$part" >> "$TMP" || fail_loader "installer part-$n 조립 실패"
+  # Never depend on a source part ending with a newline. This prevents adjacent
+  # shell tokens from being joined if a future part is edited without final EOL.
+  printf '\n' >> "$TMP"
 done
 
 bash -n "$TMP" || fail_loader "installer 셸 문법 검사 실패"
