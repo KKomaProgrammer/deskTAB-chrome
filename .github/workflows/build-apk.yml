@@ -38,31 +38,37 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Validate v1.2.19 heartbeat-safe installer and desktop repair
+      - name: Validate v1.2.20 rootfs-aware repair and installer
         shell: bash
         run: |
           set -euo pipefail
           bash -n app/src/main/assets/bootstrap.sh
-          bash -n installer/repair-v13.sh
-          cat installer/v10/part-*.sh > /tmp/desktab-installer-v11.sh
+          bash -n installer/repair-v14.sh
+          : > /tmp/desktab-installer-v11.sh
+          for f in installer/v10/part-*.sh; do
+            cat "$f" >> /tmp/desktab-installer-v11.sh
+            printf '\n' >> /tmp/desktab-installer-v11.sh
+          done
           bash -n /tmp/desktab-installer-v11.sh
           python3 - <<'PY'
           from pathlib import Path
 
           loader = Path('app/src/main/assets/bootstrap.sh').read_text()
           installer = Path('/tmp/desktab-installer-v11.sh').read_text()
-          repair = Path('installer/repair-v13.sh').read_text()
+          repair = Path('installer/repair-v14.sh').read_text()
           main = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/MainActivity.java').read_text()
           service = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java').read_text()
           gradle = Path('app/build.gradle').read_text()
 
           required_loader = [
-              'INSTALLER_COMMIT="7be61dfb249f6761f8e51a5ecde7a8c09c5bb826"',
+              'INSTALLER_COMMIT="1fdf9f66c6bb1c1ceeccaff3868b69e844df9e64"',
               'INSTALLER_DIR="$STATE_DIR/installer-v11"',
-              'repair-v13.sh',
+              'repair-v14.sh',
               'loader_heartbeat_loop',
               'loader_progress 1 60 "Termux bootstrap 실행 확인',
               '기존 Ubuntu/Chrome 실제 상태 확인',
+              'test -x /opt/google/chrome/google-chrome',
+              "printf '\\n' >> \"$TMP\"",
               'touch "$STATE_DIR/ready"',
               'RUNTIME_HEALTHY',
           ]
@@ -88,6 +94,14 @@ jobs:
               '다른 deskTAB 설치가 이미 시작됨',
           ]
           required_repair = [
+              'find_ubuntu_root',
+              'containers/ubuntu/rootfs',
+              'installed-rootfs/ubuntu',
+              'ln -s /opt/google/chrome/google-chrome',
+              'raw_guest',
+              'ubuntu-root-path',
+              'PRoot-Distro 등록 복구 경로',
+              'ARGS=(proot -0',
               '/usr/bin/xfce4-terminal --disable-server',
               'SingletonLock',
               'SingletonSocket',
@@ -105,7 +119,7 @@ jobs:
               'heartbeat_loop',
               'repair-heartbeat-state',
               'touch "$STATE_DIR/ready"',
-              "printf '%s\\n' '3' > \"$STATE_DIR/desktop-repair-version\"",
+              "printf '%s\\n' '4' > \"$STATE_DIR/desktop-repair-version\"",
           ]
           for needle in required_loader:
               assert needle in loader, f'missing loader invariant: {needle}'
@@ -118,9 +132,9 @@ jobs:
           assert 'private static final int ENGINE_VERSION = 11;' in main
           assert 'public static final int ENGINE_VERSION = 11;' in service
           assert 'termux-x11-universal-sharedUid-debug.apk' in service
-          assert "versionName '1.2.19'" in gradle
-          assert 'versionCode 22' in gradle
-          print('v1.2.19 heartbeat/cleanup/repair invariants OK')
+          assert "versionName '1.2.20'" in gradle
+          assert 'versionCode 23' in gradle
+          print('v1.2.20 rootfs/Chrome-launcher/PRoot fallback invariants OK')
           PY
 
       - name: Validate published zstd runtime metadata
