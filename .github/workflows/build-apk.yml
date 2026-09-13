@@ -57,7 +57,7 @@ jobs:
           gradle = Path('app/build.gradle').read_text()
 
           required_loader = [
-              'INSTALLER_COMMIT="569a994928c72b4e97af65950cef01b65389aee0"',
+              'INSTALLER_COMMIT="7be61dfb249f6761f8e51a5ecde7a8c09c5bb826"',
               'INSTALLER_DIR="$STATE_DIR/installer-v11"',
               'repair-v13.sh',
               'loader_heartbeat_loop',
