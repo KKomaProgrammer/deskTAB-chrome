@@ -12,12 +12,13 @@
         <package android:name="com.termux.x11" />
     </queries>
     <application android:allowBackup="true" android:icon="@drawable/ic_launcher" android:label="deskTAB Chrome" android:supportsRtl="true" android:theme="@style/Theme.DeskTab">
-        <activity android:name=".MigrationActivity" android:exported="true">
+        <activity android:name=".LauncherActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".MigrationActivity" android:exported="false" />
         <activity android:name=".MainActivityV10" android:exported="false" />
         <activity android:name=".MainActivity" android:exported="false" />
         <service android:name=".SetupService" android:exported="false" android:foregroundServiceType="dataSync" />
