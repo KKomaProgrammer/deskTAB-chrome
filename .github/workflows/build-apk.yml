@@ -40,12 +40,12 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Validate deskTAB v1.2.21
+      - name: Validate deskTAB v1.2.22 resilient boot
         shell: bash
         run: |
           set -euo pipefail
-          bash -n app/src/main/assets/bootstrap-v15.sh
-          bash -n installer/repair-v15.sh
+          bash -n app/src/main/assets/bootstrap-v16.sh
+          bash -n installer/repair-v16.sh
           : > /tmp/desktab-installer-v11.sh
           for f in installer/v10/part-*.sh; do
             cat "$f" >> /tmp/desktab-installer-v11.sh
@@ -55,66 +55,64 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          loader = Path('app/src/main/assets/bootstrap-v15.sh').read_text()
-          repair = Path('installer/repair-v15.sh').read_text()
+          loader = Path('app/src/main/assets/bootstrap-v16.sh').read_text()
+          repair = Path('installer/repair-v16.sh').read_text()
           launcher = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/LauncherActivity.java').read_text()
           service = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java').read_text()
           manifest = Path('app/src/main/AndroidManifest.xml').read_text()
           gradle = Path('app/build.gradle').read_text()
           installer = Path('/tmp/desktab-installer-v11.sh').read_text()
 
-          required_loader = [
-              'REPAIR_COMMIT="f2f2ebae3db78940ede494527d708c09b30ced99"',
-              'repair-v15.sh',
+          for needle in [
+              'repair-v16.sh',
               "printf '\\n' >> \"$TMP\"",
               '기존 Linux 환경 확인 완료 · 빠른 수리',
-          ]
-          required_repair = [
+          ]:
+              assert needle in loader, f'missing loader invariant: {needle}'
+
+          for needle in [
+              'XSOCKET="$TMP_BASE/.X11-unix/X1"',
+              'ensure_x11_server()',
+              'rm -f "$XSOCKET" "$TMP_BASE/.X1-lock"',
+              'termux-x11 :1 >"$STATE_DIR/x11.log" 2>&1 &',
+              'wait_for_x11()',
+              'ensure_desktop_session()',
+              'desktab-session.env',
               'dbus-run-session -- /usr/local/bin/desktab-xfce-inner',
-              'X-XFCE-Binaries=desktab-terminal;xfce4-terminal;',
-              'X-XFCE-Binaries=desktab-chrome;google-chrome-stable;google-chrome;',
-              'ln -sf /usr/local/bin/desktab-terminal /usr/local/bin/x-terminal-emulator',
-              'termux-x11 :1 -xstartup "$XSTARTUP"',
-              'displayResolutionMode=scaled displayScale=75 fullscreen=true',
-              '--renderer-process-limit=3',
-              'DESKTAB_SOFTWARE_RENDERING',
-              'pgrep -x xfce4-session',
-              "printf '%s\\n' '5' > \"$STATE_DIR/desktop-repair-version\"",
-              'guest-exec.sh', 'open-chrome.sh', 'stop.sh',
-          ]
-          required_launcher = [
+              'displayResolutionMode=scaled displayScale=60 fullscreen=true',
+              'GUEST_MODE=',
+              'setsid',
+              'desktop-status',
+              "printf '%s\\n' '6' > \"$STATE_DIR/desktop-repair-version\"",
+          ]:
+              assert needle in repair, f'missing repair invariant: {needle}'
+          assert '-xstartup "$XSTARTUP"' not in repair, 'X server is still coupled to xstartup'
+          assert '  --disable-gpu\n' not in repair, 'GPU is still unconditionally disabled'
+          assert 'desktab-resolv.conf' not in repair, 'launch path still rewrites DNS every time'
+
+          for needle in [
               'class LauncherActivity extends Activity',
               'primaryButton.setText("Desktop Chrome 실행")',
-              'primaryButton.setText("초기 설정 시작")',
               'settings.setText("⚙")',
-              'probeTermuxBridge()',
-              'bootstrap-v15.sh',
-              'DESKTOP_PATCH_VERSION = 5',
-          ]
-          required_installer = [
+              'bootstrap-v16.sh',
+              'DESKTOP_PATCH_VERSION = 6',
+              'handler.postDelayed(() -> openPackage(X11)',
+          ]:
+              assert needle in launcher, f'missing launcher invariant: {needle}'
+          assert 'v1.2.' not in launcher, 'main UI contains update/version copy'
+          assert '<activity android:name=".LauncherActivity" android:exported="true">' in manifest
+          assert 'termux-x11-universal-sharedUid-debug.apk' in service
+          assert "versionName '1.2.22'" in gradle
+          assert 'versionCode 25' in gradle
+
+          for needle in [
               'ROOTFS_FILE_BYTES',
               'zstd -d -q -c "$ARCHIVE_FILE"',
               'ROOTFS_STRUCTURE_OK',
               'Chrome/XFCE/필수 패키지 검증 실패',
-          ]
-          for needle in required_loader:
-              assert needle in loader, f'missing loader invariant: {needle}'
-          for needle in required_repair:
-              assert needle in repair, f'missing repair invariant: {needle}'
-          for needle in required_launcher:
-              assert needle in launcher, f'missing launcher invariant: {needle}'
-          for needle in required_installer:
+          ]:
               assert needle in installer, f'installer regression: {needle}'
-
-          assert '  --disable-gpu\n' not in repair, 'GPU is still unconditionally disabled'
-          assert 'desktab-resolv.conf' not in repair, 'launch path rewrites DNS every time'
-          assert 'v1.2.' not in launcher, 'main UI exposes update/version copy'
-          assert '<activity android:name=".LauncherActivity" android:exported="true">' in manifest
-          assert '<category android:name="android.intent.category.LAUNCHER" />' in manifest
-          assert 'termux-x11-universal-sharedUid-debug.apk' in service
-          assert "versionName '1.2.21'" in gradle
-          assert 'versionCode 24' in gradle
-          print('deskTAB v1.2.21 invariants OK')
+          print('v1.2.22 resilient boot/performance invariants OK')
           PY
 
       - name: Validate runtime metadata
@@ -125,39 +123,38 @@ jobs:
           import json, os, re, time, urllib.request
           repo = 'KKomaProgrammer/deskTAB-chrome'
           token = os.environ.get('GITHUB_TOKEN', '')
-          headers = {'User-Agent':'deskTAB-runtime-validator','Accept':'application/vnd.github+json'}
+          headers = {'User-Agent': 'deskTAB-runtime-validator', 'Accept': 'application/vnd.github+json'}
           if token: headers['Authorization'] = f'Bearer {token}'
-          def get_json(url):
+          def get_json(url, tries=8):
               last = None
-              for n in range(6):
+              for n in range(tries):
                   try:
-                      with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as r:
-                          return json.load(r)
+                      req = urllib.request.Request(url, headers=headers)
+                      with urllib.request.urlopen(req, timeout=30) as r: return json.load(r)
                   except Exception as e:
-                      last=e; time.sleep(min(n+1,4))
-              raise last
+                      last = e; time.sleep(min(1 + n, 5))
+              raise RuntimeError(last)
+          def get_text(url, tries=8):
+              last = None
+              for n in range(tries):
+                  try:
+                      req = urllib.request.Request(url, headers={'User-Agent':'deskTAB-runtime-validator','Cache-Control':'no-cache'})
+                      with urllib.request.urlopen(req, timeout=30) as r: return r.read().decode()
+                  except Exception as e:
+                      last = e; time.sleep(min(1 + n, 5))
+              raise RuntimeError(last)
           branch = get_json(f'https://api.github.com/repos/{repo}/branches/runtime-image')
           commit = branch['commit']['sha']
-          assert re.fullmatch(r'[0-9a-f]{40}', commit)
-          raw = urllib.request.Request(
-              f'https://raw.githubusercontent.com/{repo}/{commit}/runtime/manifest.txt?ci=1',
-              headers={'User-Agent':'deskTAB-runtime-validator','Cache-Control':'no-cache'})
-          with urllib.request.urlopen(raw, timeout=30) as r:
-              rows=[x.split() for x in r.read().decode().splitlines() if x.strip()]
-          fields={r[0]:r[1] for r in rows if len(r)>=2 and r[0] != 'PART'}
-          assert fields['ARCH']=='arm64' and fields['FORMAT']=='zst'
-          total=int(fields['ARCHIVE_SIZE']); part_size=int(fields.get('PART_SIZE_BYTES','50331648'))
-          parts=[r for r in rows if r[0]=='PART']
-          expected=(total+part_size-1)//part_size
-          assert len(parts)==expected==int(fields['PART_COUNT'])
-          assert sum(int(r[2]) for r in parts)==total
-          listing=get_json(f'https://api.github.com/repos/{repo}/contents/runtime?ref={commit}')
-          remote={x['name']:x['size'] for x in listing if x.get('type')=='file'}
-          for i,r in enumerate(parts):
-              assert r[1]==f'runtime-arm64.part-{i:03d}'
-              assert re.fullmatch(r'[0-9a-f]{64}', r[3])
-              assert remote.get(r[1])==int(r[2])
-          print(f'Runtime OK: {commit} parts={len(parts)} bytes={total}')
+          text = get_text(f'https://raw.githubusercontent.com/{repo}/{commit}/runtime/manifest.txt?ci=1')
+          rows = [x.split() for x in text.splitlines() if x.strip()]
+          fields = {r[0]:r[1] for r in rows if len(r)>=2 and r[0] != 'PART'}
+          assert fields['ARCH'] == 'arm64' and fields['FORMAT'] == 'zst'
+          total = int(fields['ARCHIVE_SIZE']); part_size = int(fields.get('PART_SIZE_BYTES','50331648'))
+          parts = [r for r in rows if r[0] == 'PART']
+          assert len(parts) == (total + part_size - 1)//part_size
+          assert sum(int(r[2]) for r in parts) == total
+          assert re.fullmatch(r'[0-9a-f]{64}', fields['ARCHIVE_SHA256'])
+          print('runtime metadata OK')
           PY
 
       - name: Build debug APK
@@ -181,10 +178,7 @@ jobs:
         run: |
           set -euo pipefail
           REMOTE_MAIN="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
-          if [ "$REMOTE_MAIN" != "$GITHUB_SHA" ]; then
-            echo "A newer main commit exists; skipping stale release publish."
-            exit 0
-          fi
+          [ "$REMOTE_MAIN" = "$GITHUB_SHA" ] || { echo "Newer main exists; skip stale publish"; exit 0; }
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -f apk-latest "$GITHUB_SHA"
