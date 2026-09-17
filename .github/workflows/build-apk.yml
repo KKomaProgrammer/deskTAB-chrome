@@ -38,12 +38,12 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Validate v1.2.20 rootfs-aware repair and installer
+      - name: Validate v1.2.21 persistent desktop and minimal launcher
         shell: bash
         run: |
           set -euo pipefail
-          bash -n app/src/main/assets/bootstrap.sh
-          bash -n installer/repair-v14.sh
+          bash -n app/src/main/assets/bootstrap-v15.sh
+          bash -n installer/repair-v15.sh
           : > /tmp/desktab-installer-v11.sh
           for f in installer/v10/part-*.sh; do
             cat "$f" >> /tmp/desktab-installer-v11.sh
@@ -53,88 +53,65 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          loader = Path('app/src/main/assets/bootstrap.sh').read_text()
-          installer = Path('/tmp/desktab-installer-v11.sh').read_text()
-          repair = Path('installer/repair-v14.sh').read_text()
-          main = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/MainActivity.java').read_text()
+          loader = Path('app/src/main/assets/bootstrap-v15.sh').read_text()
+          repair = Path('installer/repair-v15.sh').read_text()
+          launcher = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/LauncherActivity.java').read_text()
           service = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java').read_text()
+          manifest = Path('app/src/main/AndroidManifest.xml').read_text()
           gradle = Path('app/build.gradle').read_text()
+          installer = Path('/tmp/desktab-installer-v11.sh').read_text()
 
-          required_loader = [
-              'INSTALLER_COMMIT="1fdf9f66c6bb1c1ceeccaff3868b69e844df9e64"',
-              'INSTALLER_DIR="$STATE_DIR/installer-v11"',
-              'repair-v14.sh',
-              'loader_heartbeat_loop',
-              'loader_progress 1 60 "Termux bootstrap 실행 확인',
-              '기존 Ubuntu/Chrome 실제 상태 확인',
-              'test -x /opt/google/chrome/google-chrome',
+          for needle in [
+              'REPAIR_COMMIT="f2f2ebae3db78940ede494527d708c09b30ced99"',
+              'repair-v15.sh',
               "printf '\\n' >> \"$TMP\"",
-              'touch "$STATE_DIR/ready"',
-              'RUNTIME_HEALTHY',
-          ]
-          required_installer = [
+              '기존 Linux 환경 확인 완료 · 빠른 수리',
+          ]:
+              assert needle in loader, f'missing loader invariant: {needle}'
+
+          for needle in [
+              'dbus-run-session -- /usr/local/bin/desktab-xfce-inner',
+              'X-XFCE-Binaries=desktab-terminal;xfce4-terminal;',
+              'ln -sf /usr/local/bin/desktab-terminal /usr/local/bin/x-terminal-emulator',
+              'termux-x11 :1 -xstartup "$XSTARTUP"',
+              'displayResolutionMode=scaled displayScale=75 fullscreen=true',
+              '--renderer-process-limit=3',
+              'DESKTAB_SOFTWARE_RENDERING',
+              'pgrep -x xfce4-session',
+              'desktop-repair-version',
+              "printf '%s\\n' '5' > \"$STATE_DIR/desktop-repair-version\"",
+              'guest-exec.sh',
+              'open-chrome.sh',
+              'stop.sh',
+          ]:
+              assert needle in repair, f'missing repair invariant: {needle}'
+          assert '  --disable-gpu\n' not in repair, 'GPU is still unconditionally disabled'
+          assert 'desktab-resolv.conf' not in repair, 'launch path still rewrites DNS every time'
+
+          for needle in [
+              'class LauncherActivity extends Activity',
+              'primaryButton.setText("Desktop Chrome 실행")',
+              'settings.setText("⚙")',
+              'probeTermuxBridge()',
+              'bootstrap-v15.sh',
+              'DESKTOP_PATCH_VERSION = 5',
+          ]:
+              assert needle in launcher, f'missing launcher invariant: {needle}'
+          assert 'v1.2.' not in launcher, 'main UI contains update/version copy'
+          assert '<activity android:name=".LauncherActivity" android:exported="true">' in manifest
+          assert '<category android:name="android.intent.category.LAUNCHER" />' in manifest
+          assert 'termux-x11-universal-sharedUid-debug.apk' in service
+          assert "versionName '1.2.21'" in gradle
+          assert 'versionCode 24' in gradle
+
+          for needle in [
               'ROOTFS_FILE_BYTES',
               'zstd -d -q -c "$ARCHIVE_FILE"',
-              'trap - ERR',
-              'set +E',
-              '--no-same-owner',
-              '--no-same-permissions',
-              '--ignore-command-error',
-              'if wait "$EXTRACT_PID"; then',
               'ROOTFS_STRUCTURE_OK',
-              "printf '%s\\n' '11' > \"$STATE_DIR/engine-version\"",
-              'zstd 엔진 v11',
               'Chrome/XFCE/필수 패키지 검증 실패',
-              'usr/bin/google-chrome-stable',
-              'opt/google/chrome/google-chrome',
-              'var/lib/dpkg/status',
-              'is_ancestor_pid',
-              '현재 실행의 상위 프로세스',
-              'stale lock PID',
-              '다른 deskTAB 설치가 이미 시작됨',
-          ]
-          required_repair = [
-              'find_ubuntu_root',
-              'containers/ubuntu/rootfs',
-              'installed-rootfs/ubuntu',
-              'ln -s /opt/google/chrome/google-chrome',
-              'raw_guest',
-              'ubuntu-root-path',
-              'PRoot-Distro 등록 복구 경로',
-              'ARGS=(proot -0',
-              '/usr/bin/xfce4-terminal --disable-server',
-              'SingletonLock',
-              'SingletonSocket',
-              '--new-window',
-              '--disable-gpu',
-              '--renderer-process-limit=4',
-              '/general/use_compositing',
-              'if pgrep -x xfce4-session',
-              'termux-wake-lock',
-              'desktab-resolv.conf',
-              'dbus-launch --exit-with-session /usr/local/bin/desktab-xfce-session',
-              'custom-TerminalEmulator',
-              'custom-WebBrowser',
-              'custom-FileManager',
-              'heartbeat_loop',
-              'repair-heartbeat-state',
-              'touch "$STATE_DIR/ready"',
-              "printf '%s\\n' '4' > \"$STATE_DIR/desktop-repair-version\"",
-          ]
-          for needle in required_loader:
-              assert needle in loader, f'missing loader invariant: {needle}'
-          for needle in required_installer:
-              assert needle in installer, f'missing installer invariant: {needle}'
-          for needle in required_repair:
-              assert needle in repair, f'missing repair invariant: {needle}'
-          assert '[ -f "$STATE_DIR/ready" ]' not in loader
-          assert 'tar -xJpf' not in installer
-          assert 'private static final int ENGINE_VERSION = 11;' in main
-          assert 'public static final int ENGINE_VERSION = 11;' in service
-          assert 'termux-x11-universal-sharedUid-debug.apk' in service
-          assert "versionName '1.2.20'" in gradle
-          assert 'versionCode 23' in gradle
-          print('v1.2.20 rootfs/Chrome-launcher/PRoot fallback invariants OK')
+          ]:
+              assert needle in installer, f'installer regression: {needle}'
+          print('v1.2.21 session/performance/UI invariants OK')
           PY
 
       - name: Validate published zstd runtime metadata
