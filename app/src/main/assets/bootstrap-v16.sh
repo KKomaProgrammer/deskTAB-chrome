@@ -83,6 +83,25 @@ fetch_file() {
   return 1
 }
 
+reset_broken_desktop() {
+  local tmpbase="${TMPDIR:-$PREFIX/tmp}" p
+  loader_progress 88 20 "이전 X11/XFCE 세션 완전 초기화"
+
+  # v1.2.21/22 can leave a living PID/socket pair whose display no longer renders.
+  # A repair must not inherit that state, otherwise even the proven launcher will
+  # correctly see 'already running' and attach to the broken server again.
+  pkill -x termux-x11 >/dev/null 2>&1 || true
+  for p in chrome google-chrome xfce4-session xfconfd xfsettingsd xfdesktop xfce4-panel; do
+    pkill -x "$p" >/dev/null 2>&1 || true
+  done
+  pkill -f '[d]bus-daemon.*--session' >/dev/null 2>&1 || true
+  rm -f "$tmpbase/.X11-unix/X1" "$tmpbase/.X1-lock" \
+        "$tmpbase/desktab-session.env" "$STATE_DIR/desktop-status"
+  rm -rf "$STATE_DIR/desktop-launch.lock"
+  /system/bin/am broadcast -a com.termux.x11.ACTION_STOP -p com.termux.x11 >/dev/null 2>&1 || true
+  sleep 0.25
+}
+
 wrap_proven_launcher() {
   local live="$STATE_DIR/launch.sh"
   local core="$STATE_DIR/launch-v120-core.sh"
@@ -99,13 +118,12 @@ CORE="$STATE_DIR/launch-v120-core.sh"
 XSOCKET="$TMP_BASE/.X11-unix/X1"
 mkdir -p "$TMP_BASE/.X11-unix"
 termux-wake-lock >/dev/null 2>&1 || true
+rm -f "$STATE_DIR/desktop-status"
 
 # v1.2.20's proven order was: show Termux:X11 first -> wait -> start server/XFCE.
-# Keep that exact order even when Android delays the app-side activity launch.
 /system/bin/am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity >/dev/null 2>&1 || true
 
-# A leftover process without its X socket is not a usable server. v1.2.21/22
-# could leave this state behind and then incorrectly skip X11 startup.
+# Never trust a process alone. A process without its X socket is dead state.
 if pgrep -f '[t]ermux-x11 :1' >/dev/null 2>&1 && [ ! -S "$XSOCKET" ]; then
   pkill -x termux-x11 >/dev/null 2>&1 || true
   rm -f "$XSOCKET" "$TMP_BASE/.X1-lock"
@@ -116,8 +134,7 @@ fi
 
 sleep 0.65
 
-# Rendering fewer physical pixels is the safest large speed win. This does not
-# remove Chrome/XFCE features and only applies while the X11 activity is alive.
+# Rendering fewer physical pixels is the safest large speed win and removes no features.
 if command -v termux-x11-preference >/dev/null 2>&1; then
   if command -v timeout >/dev/null 2>&1; then
     timeout 2 termux-x11-preference displayResolutionMode=scaled displayScale=60 fullscreen=true >/dev/null 2>&1 || true
@@ -134,6 +151,7 @@ LAUNCHWRAP
 }
 
 run_proven_repair() {
+  reset_broken_desktop
   loader_progress 90 18 "검증된 v1.2.20 부팅 경로 복구"
   set +e
   /data/data/com.termux/files/usr/bin/bash "$REPAIR"
