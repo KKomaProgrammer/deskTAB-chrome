@@ -470,7 +470,7 @@ start_desktop_session() {
     pkill -x xfsettingsd >/dev/null 2>&1 || true
     pkill -x xfdesktop >/dev/null 2>&1 || true
     pkill -x xfce4-panel >/dev/null 2>&1 || true
-    pkill -f desktab-xfce-session >/dev/null 2>&1 || true
+    pkill -f "[d]esktab-xfce-session" >/dev/null 2>&1 || true
   ' >/dev/null 2>&1 || true
   if command -v setsid >/dev/null 2>&1; then
     setsid "$XSTARTUP" >"$STATE_DIR/session.log" 2>&1 </dev/null &
@@ -525,7 +525,6 @@ export PULSE_SERVER=127.0.0.1
 
 status "START|XFCE 세션 확인"
 if ! ensure_desktop_session; then
-  # One full server/session restart handles stale X11 sockets and broken D-Bus together.
   pkill -x termux-x11 >/dev/null 2>&1 || true
   rm -f "$XSOCKET" "$TMP_BASE/.X1-lock" "$TMP_BASE/desktab-session.env"
   sleep 0.2
@@ -549,7 +548,7 @@ STATE_DIR="$HOME/.desktab"
   pkill -x chrome >/dev/null 2>&1 || true
   pkill -x google-chrome >/dev/null 2>&1 || true
   pkill -x xfce4-session >/dev/null 2>&1 || true
-  pkill -f desktab-xfce-session >/dev/null 2>&1 || true
+  pkill -f "[d]esktab-xfce-session" >/dev/null 2>&1 || true
 ' >/dev/null 2>&1 || true
 pkill -x termux-x11 >/dev/null 2>&1 || true
 TMP_BASE="${TMPDIR:-$PREFIX/tmp}"
