@@ -43,7 +43,7 @@ public class LauncherActivity extends Activity {
     private static final int REQ_UNKNOWN_SOURCES = 4102;
     private static final int REQ_NOTIFICATIONS = 4103;
     private static final int ENGINE_VERSION = 11;
-    private static final int DESKTOP_PATCH_VERSION = 5;
+    private static final int DESKTOP_PATCH_VERSION = 6;
 
     private static final String TERMUX_BOOTSTRAP_PATH =
             "/data/data/com.termux/files/home/desktab-bootstrap.sh";
@@ -51,6 +51,8 @@ public class LauncherActivity extends Activity {
             "/data/data/com.termux/files/home/.desktab/heartbeat";
     private static final String TERMUX_BRIDGE_PROBE =
             "/data/data/com.termux/files/home/.desktab/bridge-ok";
+    private static final String TERMUX_DESKTOP_STATUS =
+            "/data/data/com.termux/files/home/.desktab/desktop-status";
 
     private static final String ENABLE_EXTERNAL_COMMAND =
             "for f in \"$HOME/.termux/termux.properties\" \"$HOME/.config/termux/termux.properties\"; do " +
@@ -112,6 +114,23 @@ public class LauncherActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         if (prefs == null) return;
+
+        if (prefs.getBoolean("x11_upgrade_flow", false)) {
+            if (!installed(X11)) {
+                File cached = new File(new File(getCacheDir(), "apks"), "termux-x11.apk");
+                if (cached.exists()) cached.delete();
+                prefs.edit()
+                        .putBoolean("x11_upgrade_flow", false)
+                        .putBoolean("install_flow", true)
+                        .putBoolean("dep_download_ready", false)
+                        .apply();
+                handler.postDelayed(this::continueDependencyInstall, 350);
+                return;
+            } else {
+                prefs.edit().putBoolean("x11_upgrade_flow", false).apply();
+            }
+        }
+
         if (prefs.getBoolean("install_flow", false)) {
             handler.postDelayed(this::continueDependencyInstall, 450);
         }
@@ -208,6 +227,17 @@ public class LauncherActivity extends Activity {
         }
     }
 
+    private boolean x11SharesUid() {
+        if (!installed(TERMUX) || !installed(X11)) return false;
+        try {
+            int termuxUid = getPackageManager().getApplicationInfo(TERMUX, 0).uid;
+            int x11Uid = getPackageManager().getApplicationInfo(X11, 0).uid;
+            return termuxUid == x11Uid;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private void refreshUi() {
         if (primaryButton == null) return;
         boolean termux = installed(TERMUX);
@@ -258,7 +288,7 @@ public class LauncherActivity extends Activity {
             statusText.setText(error.isEmpty() ? "Linux 환경을 준비합니다." : "설정을 다시 확인해야 합니다.");
         } else {
             primaryButton.setText("Desktop Chrome 실행");
-            statusText.setText("준비 완료");
+            statusText.setText(x11SharesUid() ? "준비 완료" : "준비 완료 · ⚙에서 성능 최적화 가능");
         }
     }
 
@@ -284,6 +314,7 @@ public class LauncherActivity extends Activity {
 
     private void showSettings() {
         String[] items = {
+                "Termux:X11 성능 최적화",
                 "필수 구성 설치/복구",
                 "Termux 연결",
                 "Linux 환경 복구",
@@ -294,17 +325,42 @@ public class LauncherActivity extends Activity {
                 .setTitle("설정")
                 .setItems(items, (d, which) -> {
                     switch (which) {
-                        case 0: startDependencyInstall(); break;
-                        case 1: connectTermux(false); break;
-                        case 2:
+                        case 0: upgradeX11Performance(); break;
+                        case 1: startDependencyInstall(); break;
+                        case 2: connectTermux(false); break;
+                        case 3:
                             prefs.edit().putBoolean("ready", false).putString("termux_last_error", "").apply();
                             runBootstrap();
                             break;
-                        case 3: stopDesktop(); break;
-                        case 4: showDiagnostics(); break;
+                        case 4: stopDesktop(); break;
+                        case 5: showDiagnostics(); break;
                     }
                 })
                 .setNegativeButton("닫기", null)
+                .show();
+    }
+
+    private void upgradeX11Performance() {
+        if (!installed(TERMUX) || !installed(X11)) {
+            startDependencyInstall();
+            return;
+        }
+        if (x11SharesUid()) {
+            Toast.makeText(this, "Termux:X11 고속 모드가 이미 적용되어 있습니다.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Termux:X11 성능 최적화")
+                .setMessage("일반 X11을 Termux와 같은 UID를 사용하는 성능판으로 교체합니다. Ubuntu와 Chrome 데이터는 Termux 안에 있으므로 삭제되지 않습니다. Android의 X11 제거/설치 확인은 각각 한 번 필요합니다.")
+                .setPositiveButton("최적화", (d, w) -> {
+                    try { stopDesktop(); } catch (Exception ignored) {}
+                    File cached = new File(new File(getCacheDir(), "apks"), "termux-x11.apk");
+                    if (cached.exists()) cached.delete();
+                    prefs.edit().putBoolean("x11_upgrade_flow", true).apply();
+                    Intent uninstall = new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + X11));
+                    startActivity(uninstall);
+                })
+                .setNegativeButton("취소", null)
                 .show();
     }
 
@@ -312,6 +368,7 @@ public class LauncherActivity extends Activity {
         String error = prefs.getString("termux_last_error", "");
         String text = "Termux: " + (installed(TERMUX) ? "정상" : "설치 필요") +
                 "\nTermux:X11: " + (installed(X11) ? "정상" : "설치 필요") +
+                "\nX11 고속 모드: " + (x11SharesUid() ? "적용" : "미적용") +
                 "\n명령 권한: " + (checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED ? "정상" : "허용 필요") +
                 "\n연결: " + (prefs.getBoolean("termux_bridge_ready", false) ? "정상" : "확인 필요") +
                 "\nLinux: " + (prefs.getBoolean("ready", false) ? "준비 완료" : "설정 필요") +
@@ -473,7 +530,7 @@ public class LauncherActivity extends Activity {
 
     private void installBootstrapIntoTermux() throws Exception {
         byte[] bytes;
-        try (InputStream in = getAssets().open("bootstrap-v15.sh");
+        try (InputStream in = getAssets().open("bootstrap-v16.sh");
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             byte[] buf = new byte[8192];
             int n;
@@ -572,16 +629,33 @@ public class LauncherActivity extends Activity {
             runBootstrap();
             return;
         }
-        openPackage(X11);
-        handler.postDelayed(() -> {
-            try {
-                sendTermux("/data/data/com.termux/files/usr/bin/bash",
-                        new String[]{"-lc", "exec \"$HOME/.desktab/launch.sh\""}, true);
-            } catch (Exception e) {
-                prefs.edit().putString("termux_last_error", "Chrome 실행 실패: " + e.getMessage()).apply();
+        try {
+            sendTermux("/data/data/com.termux/files/usr/bin/bash",
+                    new String[]{"-lc", "exec \"$HOME/.desktab/launch.sh\""}, true);
+            handler.postDelayed(() -> openPackage(X11), 350);
+            handler.postDelayed(this::syncDesktopLaunchStatus, 2600);
+        } catch (Exception e) {
+            prefs.edit().putString("termux_last_error", "Chrome 실행 실패: " + e.getMessage()).apply();
+            refreshUi();
+        }
+    }
+
+    private void syncDesktopLaunchStatus() {
+        try (InputStream in = getContentResolver().openInputStream(termuxFileUri(TERMUX_DESKTOP_STATUS))) {
+            if (in == null) return;
+            BufferedReader r = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8));
+            String line = r.readLine();
+            if (line == null) return;
+            int sep = line.indexOf('|');
+            String message = sep >= 0 ? line.substring(sep + 1) : line;
+            if (message.startsWith("FAIL|")) {
+                String error = message.substring(5);
+                prefs.edit().putString("termux_last_error", error).apply();
+                Toast.makeText(this, error, Toast.LENGTH_LONG).show();
                 refreshUi();
             }
-        }, 650);
+        } catch (Exception ignored) {
+        }
     }
 
     private void stopDesktop() {
