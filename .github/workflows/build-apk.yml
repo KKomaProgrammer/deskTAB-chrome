@@ -40,11 +40,11 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Validate deskTAB v1.2.23 proven boot
+      - name: Validate deskTAB v1.2.23 proven boot recovery
         shell: bash
         run: |
           set -euo pipefail
-          bash -n app/src/main/assets/bootstrap-v17.sh
+          bash -n app/src/main/assets/bootstrap-v16.sh
           bash -n installer/repair-v14.sh
           : > /tmp/desktab-installer-v11.sh
           for f in installer/v10/part-*.sh; do
@@ -55,8 +55,9 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          loader = Path('app/src/main/assets/bootstrap-v17.sh').read_text()
+          loader = Path('app/src/main/assets/bootstrap-v16.sh').read_text()
           repair = Path('installer/repair-v14.sh').read_text()
+          gate = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/RepairGateActivity.java').read_text()
           launcher = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/LauncherActivity.java').read_text()
           service = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java').read_text()
           manifest = Path('app/src/main/AndroidManifest.xml').read_text()
@@ -66,40 +67,43 @@ jobs:
           for needle in [
               'repair-v14.sh',
               'a5019dad56010812a46e3942bfb9de3c47543aee',
-              "printf '\\n' >> \"$TMP\"",
-              '기존 Linux 환경 확인 완료 · 빠른 수리',
+              'wrap_proven_launcher()',
+              'launch-v120-core.sh',
+              '/system/bin/am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity',
+              'displayResolutionMode=scaled displayScale=60 fullscreen=true',
+              "pgrep -f '[t]ermux-x11 :1'",
+              '[ ! -S "$XSOCKET" ]',
+              'sleep 0.65',
+              "printf '%s\\n' '7' > \"$STATE_DIR/desktop-repair-version\"",
           ]:
-              assert needle in loader, f'missing loader invariant: {needle}'
+              assert needle in loader, f'missing recovery invariant: {needle}'
 
-          # The runtime launcher is intentionally rolled back to the exact boot architecture
-          # that was proven on v1.2.20: Android X11 activity first, then Termux launch script.
+          # Verify ordering in the wrapper itself: X11 Activity is requested, then warmed up,
+          # then the exact v1.2.20 launcher core is executed.
+          am = loader.index('/system/bin/am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity')
+          warm = loader.index('sleep 0.65', am)
+          core = loader.index('exec "$CORE"', warm)
+          assert am < warm < core
+
           for needle in [
               "termux-x11 :1 >\"$STATE_DIR/x11.log\" 2>&1 &",
               'proot-distro login ubuntu --shared-tmp -- /bin/bash -lc "$GUEST_SCRIPT"',
               '--disable-gpu',
               'dbus-launch --exit-with-session /usr/local/bin/desktab-xfce-session',
           ]:
-              assert needle in repair, f'proven v1.2.20 launch invariant missing: {needle}'
+              assert needle in repair, f'v1.2.20 proven core changed: {needle}'
 
           for needle in [
-              'class LauncherActivity extends Activity',
-              'primaryButton.setText("Desktop Chrome 실행")',
-              'settings.setText("⚙")',
-              'bootstrap-v17.sh',
-              'DESKTOP_PATCH_VERSION = 7',
-              'displayResolutionMode=scaled displayScale=60 fullscreen=true',
+              'boot_recovery_v123_done',
+              '.putBoolean("ready", false)',
+              '.putBoolean("pending_setup_after_bridge", true)',
+              'LauncherActivity.class',
           ]:
-              assert needle in launcher, f'missing launcher invariant: {needle}'
+              assert needle in gate, f'upgrade repair gate missing: {needle}'
 
-          start = launcher.index('private void launchDesktopChrome()')
-          end = launcher.index('private void stopDesktop()', start)
-          launch = launcher[start:end]
-          assert launch.index('openPackage(X11);') < launch.index('sendTermux('), \
-              'regression: Termux command starts before Termux:X11 activity'
-          assert 'handler.postDelayed' in launch and '650' in launch, \
-              'regression: proven X11 warm-up delay removed'
-          assert 'v1.2.' not in launcher, 'main UI contains update/version copy'
-          assert '<activity android:name=".LauncherActivity" android:exported="true">' in manifest
+          assert '<activity android:name=".RepairGateActivity" android:exported="true">' in manifest
+          assert '<activity android:name=".LauncherActivity" android:exported="false" />' in manifest
+          assert 'class LauncherActivity extends Activity' in launcher
           assert 'termux-x11-universal-sharedUid-debug.apk' in service
           assert "versionName '1.2.23'" in gradle
           assert 'versionCode 26' in gradle
@@ -111,7 +115,7 @@ jobs:
               'Chrome/XFCE/필수 패키지 검증 실패',
           ]:
               assert needle in installer, f'installer regression: {needle}'
-          print('v1.2.23 proven boot/performance invariants OK')
+          print('v1.2.23 forced proven boot recovery invariants OK')
           PY
 
       - name: Validate runtime metadata
