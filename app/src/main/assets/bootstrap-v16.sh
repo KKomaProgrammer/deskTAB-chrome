@@ -6,9 +6,11 @@ APP_RECEIVER="$APP_PACKAGE/.SetupDoneReceiver"
 STATE_DIR="$HOME/.desktab"
 INSTALLER_DIR="$STATE_DIR/installer-v11"
 INSTALLER_COMMIT="7be61dfb249f6761f8e51a5ecde7a8c09c5bb826"
-REPAIR_COMMIT="a1cc899f80f20e9a65abcb14f72f786480584d97"
+# v1.2.20 is the last device-proven desktop boot architecture. Keep its repair
+# module pinned and only wrap the launcher with stale-X11 recovery/performance settings.
+REPAIR_COMMIT="a5019dad56010812a46e3942bfb9de3c47543aee"
 BASE="https://raw.githubusercontent.com/KKomaProgrammer/deskTAB-chrome/$INSTALLER_COMMIT/installer/v10"
-REPAIR_URL="https://raw.githubusercontent.com/KKomaProgrammer/deskTAB-chrome/$REPAIR_COMMIT/installer/repair-v16.sh"
+REPAIR_URL="https://raw.githubusercontent.com/KKomaProgrammer/deskTAB-chrome/$REPAIR_COMMIT/installer/repair-v14.sh"
 LOADER_STATE="$STATE_DIR/loader-heartbeat-state"
 LOADER_HB_PID=""
 mkdir -p "$INSTALLER_DIR"
@@ -81,7 +83,69 @@ fetch_file() {
   return 1
 }
 
-REPAIR="$INSTALLER_DIR/desktop-repair-v16.sh"
+wrap_proven_launcher() {
+  local live="$STATE_DIR/launch.sh"
+  local core="$STATE_DIR/launch-v120-core.sh"
+  [ -x "$live" ] || fail_loader "검증된 Desktop launcher 생성 실패"
+  cp -f "$live" "$core" || fail_loader "검증된 Desktop launcher 보존 실패"
+  chmod 700 "$core"
+
+  cat > "$live" <<'LAUNCHWRAP'
+#!/data/data/com.termux/files/usr/bin/bash
+set +e
+STATE_DIR="$HOME/.desktab"
+TMP_BASE="${TMPDIR:-$PREFIX/tmp}"
+CORE="$STATE_DIR/launch-v120-core.sh"
+XSOCKET="$TMP_BASE/.X11-unix/X1"
+mkdir -p "$TMP_BASE/.X11-unix"
+termux-wake-lock >/dev/null 2>&1 || true
+
+# v1.2.20's proven order was: show Termux:X11 first -> wait -> start server/XFCE.
+# Keep that exact order even when Android delays the app-side activity launch.
+/system/bin/am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity >/dev/null 2>&1 || true
+
+# A leftover process without its X socket is not a usable server. v1.2.21/22
+# could leave this state behind and then incorrectly skip X11 startup.
+if pgrep -f '[t]ermux-x11 :1' >/dev/null 2>&1 && [ ! -S "$XSOCKET" ]; then
+  pkill -x termux-x11 >/dev/null 2>&1 || true
+  rm -f "$XSOCKET" "$TMP_BASE/.X1-lock"
+fi
+if ! pgrep -f '[t]ermux-x11 :1' >/dev/null 2>&1; then
+  rm -f "$XSOCKET" "$TMP_BASE/.X1-lock"
+fi
+
+sleep 0.65
+
+# Rendering fewer physical pixels is the safest large speed win. This does not
+# remove Chrome/XFCE features and only applies while the X11 activity is alive.
+if command -v termux-x11-preference >/dev/null 2>&1; then
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 2 termux-x11-preference displayResolutionMode=scaled displayScale=60 fullscreen=true >/dev/null 2>&1 || true
+  else
+    termux-x11-preference displayResolutionMode=scaled displayScale=60 fullscreen=true >/dev/null 2>&1 &
+  fi
+fi
+
+exec "$CORE"
+LAUNCHWRAP
+  chmod 700 "$live"
+  bash -n "$live" || fail_loader "Desktop launcher 래퍼 검사 실패"
+  printf '%s\n' '7' > "$STATE_DIR/desktop-repair-version"
+}
+
+run_proven_repair() {
+  loader_progress 90 18 "검증된 v1.2.20 부팅 경로 복구"
+  set +e
+  /data/data/com.termux/files/usr/bin/bash "$REPAIR"
+  local rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail_loader "검증된 데스크톱 부팅 모듈 실행 실패"
+  wrap_proven_launcher
+  loader_progress 100 0 "Desktop Chrome 부팅 경로 복구 완료"
+  /system/bin/am broadcast -n "$APP_RECEIVER" -a "$APP_PACKAGE.SETUP_DONE" >/dev/null 2>&1 || true
+}
+
+REPAIR="$INSTALLER_DIR/desktop-repair-v14.sh"
 loader_progress 2 35 "Desktop Chrome 실행 환경 준비"
 fetch_file "$REPAIR_URL" "$REPAIR" "$REPAIR_COMMIT" || fail_loader "데스크톱 수리 모듈 다운로드 실패"
 bash -n "$REPAIR" || fail_loader "데스크톱 수리 모듈 검사 실패"
@@ -102,10 +166,10 @@ done
 
 if [ "$RUNTIME_HEALTHY" -eq 0 ]; then
   touch "$STATE_DIR/ready"
-  loader_progress 90 18 "기존 Linux 환경 확인 완료 · 빠른 수리"
   stop_loader_heartbeat
   trap - EXIT
-  exec /data/data/com.termux/files/usr/bin/bash "$REPAIR"
+  run_proven_repair
+  exit 0
 fi
 
 FULL="$INSTALLER_DIR/desktab-bootstrap-v11.sh"
@@ -135,4 +199,5 @@ fi
 
 stop_loader_heartbeat
 trap - EXIT
-exec /data/data/com.termux/files/usr/bin/bash "$REPAIR"
+run_proven_repair
+exit 0
