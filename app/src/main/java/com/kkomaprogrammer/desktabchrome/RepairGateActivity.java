@@ -5,18 +5,9 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 
-/**
- * One-time upgrade gate for v1.2.23.
- *
- * v1.2.21/22 could leave a ready=true marker while the generated X11 launcher itself
- * was no longer usable.  The launcher marker therefore cannot be trusted for this
- * upgrade.  We invalidate it once, request the existing local bootstrap/repair flow,
- * then immediately hand control to the normal UI.  No Ubuntu/Chrome user data is
- * deleted: bootstrap-v16.sh detects the existing rootfs and performs only the fast
- * repair path.
- */
+/** One-time upgrade gate for the direct-rootfs desktop repair. */
 public final class RepairGateActivity extends Activity {
-    private static final String MIGRATION_KEY = "boot_recovery_v123_done";
+    private static final String MIGRATION_KEY = "boot_recovery_v125_done";
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -29,7 +20,7 @@ public final class RepairGateActivity extends Activity {
                     .putBoolean("pending_setup_after_bridge", true)
                     .putBoolean("setup_running", false)
                     .putString("termux_last_error", "")
-                    .putString("setup_stage", "검증된 v1.2.20 부팅 경로 자동 복구")
+                    .putString("setup_stage", "기존 Ubuntu 데스크톱 직접 수리")
                     .apply();
         }
 
