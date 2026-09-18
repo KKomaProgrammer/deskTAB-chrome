@@ -5,9 +5,9 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
 
-/** One-time upgrade gate for the direct-rootfs desktop repair. */
+/** One-time upgrade gate for the syntax-verified desktop launcher repair. */
 public final class RepairGateActivity extends Activity {
-    private static final String MIGRATION_KEY = "boot_recovery_v125_done";
+    private static final String MIGRATION_KEY = "boot_recovery_v126_done";
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -20,7 +20,7 @@ public final class RepairGateActivity extends Activity {
                     .putBoolean("pending_setup_after_bridge", true)
                     .putBoolean("setup_running", false)
                     .putString("termux_last_error", "")
-                    .putString("setup_stage", "기존 Ubuntu 데스크톱 직접 수리")
+                    .putString("setup_stage", "데스크톱 실행기 문법 자동 복구")
                     .apply();
         }
 
