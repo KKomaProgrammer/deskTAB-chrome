@@ -293,15 +293,25 @@ ensurex(){
 }
 alive(){ [ -s "$T/desktab-session.env" ] && "$D/guest-exec.sh" /bin/bash -lc 'pgrep -x xfce4-session >/dev/null 2>&1' >/dev/null 2>&1; }
 starts(){
-  rm -f "$T/desktab-session.env"; "$D/guest-exec.sh" /bin/bash -lc 'pkill -x xfce4-session >/dev/null 2>&1 || true; pkill -x xfconfd >/dev/null 2>&1 || true; pkill -x xfsettingsd >/dev/null 2>&1 || true; pkill -x xfdesktop >/dev/null 2>&1 || true; pkill -x xfce4-panel >/dev/null 2>&1 || true; pkill -f "[d]esktab-xfce-session" >/dev/null 2>&1 || true' >/dev/null 2>&1 || true
-  command -v setsid >/dev/null 2>&1 && setsid "$D/xstartup.sh" >"$D/session.log" 2>&1 </dev/null & || nohup "$D/xstartup.sh" >"$D/session.log" 2>&1 </dev/null &
+  rm -f "$T/desktab-session.env"
+  "$D/guest-exec.sh" /bin/bash -lc 'pkill -x xfce4-session >/dev/null 2>&1 || true; pkill -x xfconfd >/dev/null 2>&1 || true; pkill -x xfsettingsd >/dev/null 2>&1 || true; pkill -x xfdesktop >/dev/null 2>&1 || true; pkill -x xfce4-panel >/dev/null 2>&1 || true; pkill -f "[d]esktab-xfce-session" >/dev/null 2>&1 || true' >/dev/null 2>&1 || true
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$D/xstartup.sh" >"$D/session.log" 2>&1 </dev/null &
+  else
+    nohup "$D/xstartup.sh" >"$D/session.log" 2>&1 </dev/null &
+  fi
 }
 ensures(){ alive && return 0; starts; for _ in $(seq 1 80); do alive && return 0; sleep .15; done; return 1; }
 st 'START|X11 준비'; ensurex || { st 'FAIL|X11 서버 시작 실패'; exit 81; }
 command -v termux-x11-preference >/dev/null 2>&1 && timeout 2 termux-x11-preference displayResolutionMode=scaled displayScale=60 fullscreen=true >/dev/null 2>&1 || true
 pulseaudio --start --exit-idle-time=-1 >/dev/null 2>&1 || true
 st 'START|XFCE 준비'; ensures || { pkill -x termux-x11 >/dev/null 2>&1 || true; rm -f "$X" "$T/.X1-lock" "$T/desktab-session.env"; ensurex && ensures || { st 'FAIL|XFCE 세션 시작 실패'; exit 82; }; }
-st 'OK|Desktop Chrome 실행'; command -v setsid >/dev/null 2>&1 && setsid "$D/open-chrome.sh" >"$D/chrome-launch.log" 2>&1 </dev/null & || nohup "$D/open-chrome.sh" >"$D/chrome-launch.log" 2>&1 </dev/null &
+st 'OK|Desktop Chrome 실행'
+if command -v setsid >/dev/null 2>&1; then
+  setsid "$D/open-chrome.sh" >"$D/chrome-launch.log" 2>&1 </dev/null &
+else
+  nohup "$D/open-chrome.sh" >"$D/chrome-launch.log" 2>&1 </dev/null &
+fi
 exit 0
 S
 cat > "$STATE_DIR/stop.sh" <<'S'
@@ -312,7 +322,7 @@ pkill -x termux-x11 >/dev/null 2>&1 || true; T="${TMPDIR:-$PREFIX/tmp}"; rm -f "
 S
 chmod 700 "$STATE_DIR/launch.sh" "$STATE_DIR/stop.sh"
 for f in "$STATE_DIR/guest-exec.sh" "$STATE_DIR/xstartup.sh" "$STATE_DIR/open-chrome.sh" "$STATE_DIR/launch.sh" "$STATE_DIR/stop.sh"; do bash -n "$f" || fail "96% · 실행기 검사 실패: $(basename "$f")"; done
-printf '%s\n' 10 > "$STATE_DIR/desktop-repair-version"; printf '%s\n' 11 > "$STATE_DIR/engine-version"; touch "$STATE_DIR/ready"
+printf '%s\n' 11 > "$STATE_DIR/desktop-repair-version"; printf '%s\n' 11 > "$STATE_DIR/engine-version"; touch "$STATE_DIR/ready"
 progress 100 0 "Desktop Chrome 준비 완료"
 /system/bin/am broadcast -n "$APP_RECEIVER" -a "$APP_PACKAGE.SETUP_DONE" >/dev/null 2>&1 || true
 exit 0
