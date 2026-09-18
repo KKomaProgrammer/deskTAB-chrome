@@ -1,0 +1,14 @@
+name: Validate generated shell scripts
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  generated-shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate generated deskTAB scripts
+        run: python3 tools/validate-generated-shell.py
