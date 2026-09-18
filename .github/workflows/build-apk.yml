@@ -40,12 +40,13 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Validate deskTAB v1.2.25 direct desktop repair
+      - name: Validate deskTAB v1.2.26 desktop launcher repair
         shell: bash
         run: |
           set -euo pipefail
           bash -n app/src/main/assets/bootstrap-v16.sh
           bash -n installer/repair-v17.sh
+          python3 tools/validate-generated-shell.py
           : > /tmp/desktab-installer-v11.sh
           for f in installer/v10/part-*.sh; do
             cat "$f" >> /tmp/desktab-installer-v11.sh
@@ -66,29 +67,29 @@ jobs:
 
           for needle in [
               'repair-v17.sh',
-              'd1f30d93fc7036e14dc74e77dec8d65eb26eff2d',
+              '0268534aca2bb8786ba3111be49a1f028b91f108',
               'run_repair()',
               'desktop-repair-v17.sh',
           ]:
-              assert needle in loader, f'missing v17 loader invariant: {needle}'
+              assert needle in loader, f'missing v1.2.26 loader invariant: {needle}'
           assert '검증된 데스크톱 부팅 모듈 실행 실패' not in loader
 
           for needle in [
               '데스크톱 실행 파일 직접 복구',
               '"$ROOT/usr/local/bin/desktab-terminal"',
               '"$ROOT/usr/local/bin/desktab-chrome"',
-              '"$ROOT/root/.local/share/xfce4/helpers/custom-TerminalEmulator.desktop"',
               'X-XFCE-Binaries=desktab-terminal;xfce4-terminal;',
               'dbus-run-session -- /usr/local/bin/desktab-xfce-inner',
-              "printf '%s\\n' 9 > \"$STATE_DIR/desktop-repair-version\"",
+              "printf '%s\\n' 11 > \"$STATE_DIR/desktop-repair-version\"",
               "pgrep -f '[t]ermux-x11 :1'",
               'displayResolutionMode=scaled displayScale=60 fullscreen=true',
           ]:
-              assert needle in repair, f'missing direct repair invariant: {needle}'
-          assert '/tmp/desktab-root-fix.sh' not in repair
+              assert needle in repair, f'missing repair invariant: {needle}'
+          assert '&; waitx' not in repair
+          assert '&& setsid "$D/xstartup.sh"' not in repair
 
           for needle in [
-              'boot_recovery_v125_done',
+              'boot_recovery_v126_done',
               '.putBoolean("ready", false)',
               '.putBoolean("pending_setup_after_bridge", true)',
               'LauncherActivity.class',
@@ -106,8 +107,8 @@ jobs:
           assert '<activity android:name=".RepairGateActivity" android:exported="true">' in manifest
           assert '<activity android:name=".LauncherActivity" android:exported="false" />' in manifest
           assert 'termux-x11-universal-sharedUid-debug.apk' in service
-          assert "versionName '1.2.25'" in gradle
-          assert 'versionCode 28' in gradle
+          assert "versionName '1.2.26'" in gradle
+          assert 'versionCode 29' in gradle
 
           for needle in [
               'ROOTFS_FILE_BYTES',
@@ -116,7 +117,7 @@ jobs:
               'Chrome/XFCE/필수 패키지 검증 실패',
           ]:
               assert needle in installer, f'installer regression: {needle}'
-          print('v1.2.25 direct rootfs repair invariants OK')
+          print('v1.2.26 launcher repair invariants OK')
           PY
 
       - name: Validate runtime metadata
