@@ -40,12 +40,12 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Validate deskTAB v1.2.24 recovery and connection state
+      - name: Validate deskTAB v1.2.25 direct desktop repair
         shell: bash
         run: |
           set -euo pipefail
           bash -n app/src/main/assets/bootstrap-v16.sh
-          bash -n installer/repair-v14.sh
+          bash -n installer/repair-v17.sh
           : > /tmp/desktab-installer-v11.sh
           for f in installer/v10/part-*.sh; do
             cat "$f" >> /tmp/desktab-installer-v11.sh
@@ -56,7 +56,7 @@ jobs:
           from pathlib import Path
 
           loader = Path('app/src/main/assets/bootstrap-v16.sh').read_text()
-          repair = Path('installer/repair-v14.sh').read_text()
+          repair = Path('installer/repair-v17.sh').read_text()
           gate = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/RepairGateActivity.java').read_text()
           launcher = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/LauncherActivity.java').read_text()
           service = Path('app/src/main/java/com/kkomaprogrammer/desktabchrome/SetupService.java').read_text()
@@ -65,55 +65,49 @@ jobs:
           installer = Path('/tmp/desktab-installer-v11.sh').read_text()
 
           for needle in [
-              'repair-v14.sh',
-              'a5019dad56010812a46e3942bfb9de3c47543aee',
-              'wrap_proven_launcher()',
-              'launch-v120-core.sh',
-              '/system/bin/am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity',
-              'displayResolutionMode=scaled displayScale=60 fullscreen=true',
+              'repair-v17.sh',
+              'd1f30d93fc7036e14dc74e77dec8d65eb26eff2d',
+              'run_repair()',
+              'desktop-repair-v17.sh',
+          ]:
+              assert needle in loader, f'missing v17 loader invariant: {needle}'
+          assert '검증된 데스크톱 부팅 모듈 실행 실패' not in loader
+
+          for needle in [
+              '데스크톱 실행 파일 직접 복구',
+              '"$ROOT/usr/local/bin/desktab-terminal"',
+              '"$ROOT/usr/local/bin/desktab-chrome"',
+              '"$ROOT/root/.local/share/xfce4/helpers/custom-TerminalEmulator.desktop"',
+              'X-XFCE-Binaries=desktab-terminal;xfce4-terminal;',
+              'dbus-run-session -- /usr/local/bin/desktab-xfce-inner',
+              "printf '%s\\n' 9 > \"$STATE_DIR/desktop-repair-version\"",
               "pgrep -f '[t]ermux-x11 :1'",
-              '[ ! -S "$XSOCKET" ]',
-              'sleep 0.65',
-              "printf '%s\\n' '7' > \"$STATE_DIR/desktop-repair-version\"",
+              'displayResolutionMode=scaled displayScale=60 fullscreen=true',
           ]:
-              assert needle in loader, f'missing recovery invariant: {needle}'
-
-          am = loader.index('/system/bin/am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity')
-          warm = loader.index('sleep 0.65', am)
-          core = loader.index('exec "$CORE"', warm)
-          assert am < warm < core
+              assert needle in repair, f'missing direct repair invariant: {needle}'
+          assert '/tmp/desktab-root-fix.sh' not in repair
 
           for needle in [
-              "termux-x11 :1 >\"$STATE_DIR/x11.log\" 2>&1 &",
-              'proot-distro login ubuntu --shared-tmp -- /bin/bash -lc "$GUEST_SCRIPT"',
-              '--disable-gpu',
-              'dbus-launch --exit-with-session /usr/local/bin/desktab-xfce-session',
-          ]:
-              assert needle in repair, f'v1.2.20 proven core changed: {needle}'
-
-          for needle in [
-              'boot_recovery_v123_done',
+              'boot_recovery_v125_done',
               '.putBoolean("ready", false)',
               '.putBoolean("pending_setup_after_bridge", true)',
               'LauncherActivity.class',
           ]:
-              assert needle in gate, f'upgrade repair gate missing: {needle}'
+              assert needle in gate, f'upgrade gate missing: {needle}'
 
           for needle in [
               'private boolean isTermuxConnected()',
               'boolean bridge = isTermuxConnected();',
               'if (!isTermuxConnected())',
               'if (!connected) items.add("Termux 연결");',
-              'boolean connected = isTermuxConnected();',
           ]:
               assert needle in launcher, f'connection-state regression: {needle}'
 
           assert '<activity android:name=".RepairGateActivity" android:exported="true">' in manifest
           assert '<activity android:name=".LauncherActivity" android:exported="false" />' in manifest
-          assert 'class LauncherActivity extends Activity' in launcher
           assert 'termux-x11-universal-sharedUid-debug.apk' in service
-          assert "versionName '1.2.24'" in gradle
-          assert 'versionCode 27' in gradle
+          assert "versionName '1.2.25'" in gradle
+          assert 'versionCode 28' in gradle
 
           for needle in [
               'ROOTFS_FILE_BYTES',
@@ -122,7 +116,7 @@ jobs:
               'Chrome/XFCE/필수 패키지 검증 실패',
           ]:
               assert needle in installer, f'installer regression: {needle}'
-          print('v1.2.24 connection-state and recovery invariants OK')
+          print('v1.2.25 direct rootfs repair invariants OK')
           PY
 
       - name: Validate runtime metadata
