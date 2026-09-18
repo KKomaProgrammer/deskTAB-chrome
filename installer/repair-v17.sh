@@ -282,8 +282,14 @@ waitx(){ for _ in $(seq 1 80); do [ -S "$X" ] && return 0; sleep .1; done; retur
 ensurex(){
   /system/bin/am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity >/dev/null 2>&1 || true
   pgrep -f '[t]ermux-x11 :1' >/dev/null 2>&1 && [ -S "$X" ] && return 0
-  pkill -x termux-x11 >/dev/null 2>&1 || true; rm -f "$X" "$T/.X1-lock"; termux-x11 :1 >"$D/x11.log" 2>&1 &; waitx && return 0
-  pkill -x termux-x11 >/dev/null 2>&1 || true; rm -f "$X" "$T/.X1-lock"; termux-x11 :1 -legacy-drawing >"$D/x11.log" 2>&1 &; waitx
+  pkill -x termux-x11 >/dev/null 2>&1 || true
+  rm -f "$X" "$T/.X1-lock"
+  termux-x11 :1 >"$D/x11.log" 2>&1 &
+  waitx && return 0
+  pkill -x termux-x11 >/dev/null 2>&1 || true
+  rm -f "$X" "$T/.X1-lock"
+  termux-x11 :1 -legacy-drawing >"$D/x11.log" 2>&1 &
+  waitx
 }
 alive(){ [ -s "$T/desktab-session.env" ] && "$D/guest-exec.sh" /bin/bash -lc 'pgrep -x xfce4-session >/dev/null 2>&1' >/dev/null 2>&1; }
 starts(){
@@ -306,7 +312,7 @@ pkill -x termux-x11 >/dev/null 2>&1 || true; T="${TMPDIR:-$PREFIX/tmp}"; rm -f "
 S
 chmod 700 "$STATE_DIR/launch.sh" "$STATE_DIR/stop.sh"
 for f in "$STATE_DIR/guest-exec.sh" "$STATE_DIR/xstartup.sh" "$STATE_DIR/open-chrome.sh" "$STATE_DIR/launch.sh" "$STATE_DIR/stop.sh"; do bash -n "$f" || fail "96% · 실행기 검사 실패: $(basename "$f")"; done
-printf '%s\n' 9 > "$STATE_DIR/desktop-repair-version"; printf '%s\n' 11 > "$STATE_DIR/engine-version"; touch "$STATE_DIR/ready"
+printf '%s\n' 10 > "$STATE_DIR/desktop-repair-version"; printf '%s\n' 11 > "$STATE_DIR/engine-version"; touch "$STATE_DIR/ready"
 progress 100 0 "Desktop Chrome 준비 완료"
 /system/bin/am broadcast -n "$APP_RECEIVER" -a "$APP_PACKAGE.SETUP_DONE" >/dev/null 2>&1 || true
 exit 0
