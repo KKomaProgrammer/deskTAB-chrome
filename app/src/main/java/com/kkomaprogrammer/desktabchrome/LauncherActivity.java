@@ -143,6 +143,7 @@ public class LauncherActivity extends Activity {
                 }
             }
         }
+        isTermuxConnected();
         syncHeartbeatFromTermux();
         refreshUi();
     }
@@ -238,12 +239,32 @@ public class LauncherActivity extends Activity {
         }
     }
 
+    private boolean isTermuxConnected() {
+        boolean termux = installed(TERMUX);
+        boolean permission = checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED;
+        if (!termux || !permission) {
+            if (prefs.getBoolean("termux_bridge_ready", false)) {
+                prefs.edit().putBoolean("termux_bridge_ready", false).apply();
+            }
+            return false;
+        }
+        if (prefs.getBoolean("termux_bridge_ready", false)) return true;
+        if (probeTermuxBridge()) {
+            prefs.edit()
+                    .putBoolean("termux_bridge_ready", true)
+                    .putString("termux_last_error", "")
+                    .apply();
+            return true;
+        }
+        return false;
+    }
+
     private void refreshUi() {
         if (primaryButton == null) return;
         boolean termux = installed(TERMUX);
         boolean x11 = installed(X11);
         boolean permission = checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED;
-        boolean bridge = prefs.getBoolean("termux_bridge_ready", false);
+        boolean bridge = isTermuxConnected();
         boolean ready = prefs.getBoolean("ready", false);
         boolean running = prefs.getBoolean("setup_running", false);
         boolean depRunning = prefs.getBoolean("dep_download_running", false);
@@ -301,7 +322,7 @@ public class LauncherActivity extends Activity {
             requestPermissions(new String[]{RUN_PERMISSION}, REQ_RUN_PERMISSION);
             return;
         }
-        if (!prefs.getBoolean("termux_bridge_ready", false)) {
+        if (!isTermuxConnected()) {
             connectTermux(true);
             return;
         }
@@ -313,27 +334,33 @@ public class LauncherActivity extends Activity {
     }
 
     private void showSettings() {
-        String[] items = {
-                "Termux:X11 성능 최적화",
-                "필수 구성 설치/복구",
-                "Termux 연결",
-                "Linux 환경 복구",
-                "데스크톱 세션 종료",
-                "진단"
-        };
+        boolean connected = isTermuxConnected();
+        java.util.ArrayList<String> items = new java.util.ArrayList<>();
+        items.add("Termux:X11 성능 최적화");
+        items.add("필수 구성 설치/복구");
+        if (!connected) items.add("Termux 연결");
+        items.add("Linux 환경 복구");
+        items.add("데스크톱 세션 종료");
+        items.add("진단");
+
+        String[] labels = items.toArray(new String[0]);
         new AlertDialog.Builder(this)
                 .setTitle("설정")
-                .setItems(items, (d, which) -> {
-                    switch (which) {
-                        case 0: upgradeX11Performance(); break;
-                        case 1: startDependencyInstall(); break;
-                        case 2: connectTermux(false); break;
-                        case 3:
-                            prefs.edit().putBoolean("ready", false).putString("termux_last_error", "").apply();
-                            runBootstrap();
-                            break;
-                        case 4: stopDesktop(); break;
-                        case 5: showDiagnostics(); break;
+                .setItems(labels, (d, which) -> {
+                    String item = labels[which];
+                    if ("Termux:X11 성능 최적화".equals(item)) {
+                        upgradeX11Performance();
+                    } else if ("필수 구성 설치/복구".equals(item)) {
+                        startDependencyInstall();
+                    } else if ("Termux 연결".equals(item)) {
+                        connectTermux(false);
+                    } else if ("Linux 환경 복구".equals(item)) {
+                        prefs.edit().putBoolean("ready", false).putString("termux_last_error", "").apply();
+                        runBootstrap();
+                    } else if ("데스크톱 세션 종료".equals(item)) {
+                        stopDesktop();
+                    } else if ("진단".equals(item)) {
+                        showDiagnostics();
                     }
                 })
                 .setNegativeButton("닫기", null)
@@ -366,11 +393,12 @@ public class LauncherActivity extends Activity {
 
     private void showDiagnostics() {
         String error = prefs.getString("termux_last_error", "");
+        boolean connected = isTermuxConnected();
         String text = "Termux: " + (installed(TERMUX) ? "정상" : "설치 필요") +
                 "\nTermux:X11: " + (installed(X11) ? "정상" : "설치 필요") +
                 "\nX11 고속 모드: " + (x11SharesUid() ? "적용" : "미적용") +
                 "\n명령 권한: " + (checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED ? "정상" : "허용 필요") +
-                "\n연결: " + (prefs.getBoolean("termux_bridge_ready", false) ? "정상" : "확인 필요") +
+                "\n연결: " + (connected ? "정상" : "확인 필요") +
                 "\nLinux: " + (prefs.getBoolean("ready", false) ? "준비 완료" : "설정 필요") +
                 (error.isEmpty() ? "" : "\n\n최근 오류:\n" + error);
         new AlertDialog.Builder(this).setTitle("진단").setMessage(text)
